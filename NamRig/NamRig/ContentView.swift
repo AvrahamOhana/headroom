@@ -61,7 +61,7 @@ private enum ChainBlock: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @State private var audio = AudioEngine()
-    @State private var selected: ChainBlock = .amp
+    @State private var selected: ChainBlock? = nil   // nil → no editor shown (clean screen)
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSave = false
     @State private var newName = ""
@@ -80,7 +80,7 @@ struct ContentView: View {
                 header
                 presetBar
                 chainStrip
-                editorPanel
+                if let sel = selected { editorPanel(sel) }
                 outputCard
                 if let err = audio.lastError {
                     Text(err).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center)
@@ -186,6 +186,8 @@ struct ContentView: View {
                         tile(block)
                     }
                     connector
+                    addTile
+                    connector
                     endLabel("OUT")
                 }
                 .padding(.vertical, 2)
@@ -195,7 +197,7 @@ struct ContentView: View {
 
     private func tile(_ block: ChainBlock) -> some View {
         let on = isOn(block), sel = selected == block
-        return Button { selected = block } label: {
+        return Button { selected = (selected == block ? nil : block) } label: {
             VStack(spacing: 6) {
                 Image(systemName: block.icon).font(.system(size: 20, weight: .semibold))
                 Text(block.short).font(.system(size: 10, weight: .heavy))
@@ -209,6 +211,26 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
+    private var addTile: some View {
+        Menu {
+            ForEach(audio.availableToAdd, id: \.self) { kind in
+                if let cb = ChainBlock(kind) {
+                    Button { audio.addBlock(kind); selected = cb } label: { Label(cb.full, systemImage: cb.icon) }
+                }
+            }
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: "plus").font(.system(size: 20, weight: .semibold))
+                Text("ADD").font(.system(size: 10, weight: .heavy))
+            }
+            .frame(width: 58, height: 74)
+            .foregroundStyle(.secondary)
+            .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1.5, dash: [4])))
+        }
+        .disabled(audio.availableToAdd.isEmpty)
+    }
+
     private func endLabel(_ t: String) -> some View {
         Text(t).font(.caption2.bold()).foregroundStyle(.secondary).frame(width: 26, height: 74)
     }
@@ -216,19 +238,21 @@ struct ContentView: View {
 
     // MARK: - Editor
 
-    private var editorPanel: some View {
+    private func editorPanel(_ block: ChainBlock) -> some View {
         VStack(spacing: 12) {
             HStack {
-                Image(systemName: selected.icon).foregroundStyle(isOn(selected) ? selected.color : .secondary)
-                Text(selected.full).font(.headline)
+                Image(systemName: block.icon).foregroundStyle(isOn(block) ? block.color : .secondary)
+                Text(block.full).font(.headline)
                 Spacer()
-                Toggle("", isOn: enabled(selected)).labelsHidden().tint(.green)
+                Button { audio.removeBlock(block.kind); selected = nil } label: { Image(systemName: "trash").font(.subheadline) }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                Toggle("", isOn: enabled(block)).labelsHidden().tint(.green)
             }
-            controls(selected)
+            controls(block)
         }
         .padding().frame(maxWidth: .infinity)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(selected.color.opacity(0.5), lineWidth: 1.5))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(block.color.opacity(0.5), lineWidth: 1.5))
     }
 
     @ViewBuilder private func controls(_ b: ChainBlock) -> some View {
@@ -387,6 +411,7 @@ struct ContentView: View {
                         }
                     }
                     .onMove { from, to in var o = audio.blockOrder; o.move(fromOffsets: from, toOffset: to); audio.setOrder(o) }
+                    .onDelete { idx in let kinds = idx.map { audio.blockOrder[$0] }; for k in kinds { audio.removeBlock(k) } }
                 } footer: {
                     Text("Drag to reorder the chain. Signal flows top → bottom (IN → OUT).")
                 }

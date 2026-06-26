@@ -224,6 +224,20 @@ final class AudioEngine {
     var blockOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .eq, .chorus, .flanger, .tremolo, .delay, .reverb]
     func applyOrder() { context.chain.reorder(blockOrder.compactMap { indexByKind[$0] }) }
     func setOrder(_ newOrder: [BlockKind]) { blockOrder = newOrder; applyOrder() }
+    var availableToAdd: [BlockKind] { BlockKind.allCases.filter { !blockOrder.contains($0) } }
+    func addBlock(_ kind: BlockKind) {
+        guard !blockOrder.contains(kind) else { return }
+        blockOrder.append(kind); setBlockEnabled(kind, true); applyOrder()
+    }
+    func removeBlock(_ kind: BlockKind) { blockOrder.removeAll { $0 == kind }; applyOrder() }
+    func setBlockEnabled(_ kind: BlockKind, _ on: Bool) {
+        switch kind {
+        case .gate: gateEnabled = on; case .comp: compEnabled = on; case .boost: boostEnabled = on
+        case .drive: driveEnabled = on; case .pedal: pedalEnabled = on; case .amp: ampEnabled = on
+        case .eq: eqEnabled = on; case .chorus: chorusEnabled = on; case .flanger: flangerEnabled = on
+        case .tremolo: tremoloEnabled = on; case .delay: delayEnabled = on; case .reverb: reverbEnabled = on
+        }
+    }
 
     var modelLoaded: Bool { amp.model != nil }
     var inPeakDb: Float { Self.toDb(context.inPeak) }
@@ -466,8 +480,7 @@ final class AudioEngine {
         flangerEnabled = p.flangerOn; flangerRateHz = p.flangerRate; flangerDepthMs = p.flangerDepth; flangerFeedbackPct = p.flangerFb; flangerMixPct = p.flangerMix
         tremoloEnabled = p.tremoloOn; tremoloRateHz = p.tremoloRate; tremoloDepthPct = p.tremoloDepth
         reverbType = p.reverbType
-        var ord = p.order.compactMap { BlockKind(rawValue: $0) }
-        for k in AudioEngine.defaultOrder where !ord.contains(k) { ord.append(k) }
+        let ord = p.order.compactMap { BlockKind(rawValue: $0) }   // a preset's chain may be a curated subset
         blockOrder = ord.isEmpty ? AudioEngine.defaultOrder : ord
         applyOrder()
         pedalEnabled = p.pedalOn; pedalDriveDb = p.pedalDrive; pedalLevelDb = p.pedalLevel
