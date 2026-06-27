@@ -31,43 +31,27 @@ struct LiveView: View {
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
     }
 
-    // MARK: top — in/out meters + CPU + close
+    // MARK: top — shared signal strip + run light + close
     private var topRow: some View {
-        TimelineView(.periodic(from: .now, by: 0.08)) { _ in
-            let cpu = audio.cpuPercent
-            HStack(spacing: 16) {
-                meter("IN", audio.inPeakDb)
-                meter("OUT", audio.outPeakDb)
-                Spacer()
-                HStack(spacing: 4) {
-                    Circle().fill(cpu > 80 ? Color.red : (cpu > 50 ? Color.orange : Color.green)).frame(width: 7, height: 7)
-                    Text("\(cpu)%").font(.system(size: 14, weight: .bold, design: .rounded)).monospacedDigit()
-                        .foregroundStyle(cpu > 80 ? .red : .gray)
-                }
-                Circle().fill(audio.state == .running ? Color.green : Color.gray).frame(width: 11, height: 11)
-                Button(action: onExit) { Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.white.opacity(0.45)) }
-                    .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private func meter(_ label: String, _ db: Float) -> some View {
-        let norm = max(0, min(1, (Double(db) + 60) / 60))
-        return HStack(spacing: 6) {
-            Text(label).font(.system(size: 11, weight: .heavy, design: .rounded)).foregroundStyle(.gray)
-            ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.12))
-                Rectangle().fill(db > -1 ? Color.red : Color.green).scaleEffect(x: CGFloat(norm), anchor: .leading)
-            }
-            .frame(width: 72, height: 6).clipShape(Capsule())
+        HStack(spacing: 14) {
+            SignalStrip(audio: audio)
+            Spacer()
+            Circle().fill(audio.state == .running ? Color.green : Color.gray).frame(width: 11, height: 11)
+                .shadow(color: audio.state == .running ? .green.opacity(0.7) : .clear, radius: 5)
+            Button(action: onExit) { Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.white.opacity(0.45)) }
+                .buttonStyle(.plain)
         }
     }
 
     // MARK: center — huge preset name
     private var presetName: some View {
         VStack(spacing: 14) {
+            Text(audio.presetTag)
+                .font(.system(size: 44, weight: .black, design: .rounded)).monospacedDigit().foregroundStyle(.white)
+                .padding(.horizontal, 22).padding(.vertical, 6)
+                .background(sceneColor(audio.sceneInBank), in: RoundedRectangle(cornerRadius: 16))
             Text(audio.currentPresetName)
-                .font(.system(size: 150, weight: .black, design: .rounded))
+                .font(.system(size: 130, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.25).lineLimit(2).multilineTextAlignment(.center)
             Text(subtitle).font(.system(.title3, design: .monospaced)).foregroundStyle(.gray)

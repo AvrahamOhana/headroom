@@ -486,6 +486,8 @@ final class AudioEngine {
     static let liveBankSize = 4
     var bankIndex: Int { presets.isEmpty ? 0 : currentPresetIndex / Self.liveBankSize }
     var sceneInBank: Int { currentPresetIndex % Self.liveBankSize }
+    /// Stage-friendly tag: bank number + scene letter, e.g. "0A", "1C".
+    var presetTag: String { "\(bankIndex)\(["A", "B", "C", "D"][min(max(sceneInBank, 0), 3)])" }
     func handleProgramChange(_ pc: Int) { loadPreset(at: pc) }   // loadPreset already range-guards
 
     /// MIDI CC → engine param (0…1 normalized into the param's range). Reuses the existing didSet→block path.

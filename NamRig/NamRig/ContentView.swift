@@ -82,6 +82,7 @@ struct ContentView: View {
         ScrollView {
             VStack(spacing: 14) {
                 header
+                SignalStrip(audio: audio).frame(maxWidth: .infinity, alignment: .leading)
                 presetBar
                 chainStrip
                 if let sel = selected { editorPanel(sel) }
@@ -127,7 +128,6 @@ struct ContentView: View {
         HStack(spacing: 12) {
             Text("NamRig").font(.title2.bold())
             Spacer()
-            cpuBadge
             Button { showTuner = true } label: { Image(systemName: "tuningfork").font(.title3) }.buttonStyle(.plain)
             Button { showMIDI = true } label: { Image(systemName: "pianokeys").font(.title3) }.buttonStyle(.plain)
             Button { showLive = true } label: { Image(systemName: "tv").font(.title3) }.buttonStyle(.plain)
@@ -157,9 +157,15 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Button { audio.prevPreset() } label: { Image(systemName: "chevron.left.circle.fill").font(.title) }.buttonStyle(.plain)
             Spacer()
-            VStack(spacing: 1) {
-                Text(audio.currentPresetName)
-                    .font(.system(size: 30, weight: .heavy, design: .rounded)).lineLimit(1).minimumScaleFactor(0.6)
+            VStack(spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(audio.presetTag)
+                        .font(.system(size: 19, weight: .black, design: .rounded)).monospacedDigit().foregroundStyle(.white)
+                        .padding(.horizontal, 9).padding(.vertical, 2)
+                        .background(sceneColor(audio.sceneInBank), in: RoundedRectangle(cornerRadius: 7))
+                    Text(audio.currentPresetName)
+                        .font(.system(size: 27, weight: .heavy, design: .rounded)).lineLimit(1).minimumScaleFactor(0.5)
+                }
                 Text("PRESET \(audio.currentPresetIndex + 1)/\(audio.presets.count)")
                     .font(.caption2).foregroundStyle(.secondary)
             }
@@ -449,7 +455,18 @@ struct ContentView: View {
     }
 
     private var outputCard: some View {
-        card { sliderRow("Output", value: $audio.outputLevelDb, range: -40...12) }
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "slider.horizontal.3").foregroundStyle(.secondary)
+                Text("OUTPUT / MIXER").font(.caption.bold()).foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(.tertiary)
+            }
+            sliderRow("Master", value: $audio.outputLevelDb, range: -40...12)
+        }
+        .padding().frame(maxWidth: .infinity)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.secondary.opacity(0.25)))
     }
 
     // MARK: - Tuner sheet

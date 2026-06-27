@@ -345,8 +345,8 @@ struct Oversampler {
     private var downScratch: UnsafeMutableBufferPointer<Float>? // [downHist | high]            (N−1 + maxBlk·factor)
     private var filtered: UnsafeMutableBufferPointer<Float>?   // decimator FIR output          (maxBlk·factor)
 
-    /// Pure delay the oversampler adds, in base-rate samples.
-    var latencySamples: Int { factor > 0 ? (N - 1) / factor : 0 }
+    /// Pure delay the oversampler adds, in base-rate samples (nearest integer of (N−1)/factor).
+    var latencySamples: Int { factor > 0 ? (N - 1 + factor / 2) / factor : 0 }
 
     mutating func prepare(factor: Int, maxBlock: Int) {
         let f = max(1, factor), mb = max(1, maxBlock)
