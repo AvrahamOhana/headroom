@@ -27,11 +27,42 @@ struct Preset: Codable, Identifiable {
     var flangerOn = false, flangerRate = 0.4, flangerDepth = 2.0, flangerFb = 50.0, flangerMix = 50.0
     var tremoloOn = false, tremoloRate = 5.0, tremoloDepth = 50.0
     var reverbType = 3
-    var order: [String] = ["Noise Gate", "Compressor", "Boost", "Drive", "Pedal", "Amp", "EQ", "Chorus", "Flanger", "Tremolo", "Delay", "Reverb"]
+    var order: [String] = ["Noise Gate", "Compressor", "Boost", "Drive", "Pedal", "Amp", "EQ", "Chorus", "Flanger", "Tremolo", "Delay", "Reverb", "IR Reverb"]
 
     // 2nd neural slot (pedal capture in front of the amp)
     var pedalOn = false, pedalModel = "", pedalDrive = 0.0, pedalLevel = 0.0
     var cabIR = ""   // cab impulse-response filename (in Documents/IRs), "" = none
+    var irReverbOn = false, irReverbMix = 35.0, irReverbPredelay = 0.0, irReverbIR = ""
+}
+
+// Tolerant decoder: every field falls back to its default when a key is absent, so ADDING new
+// fields never invalidates saved presets again (the old "schema change wipes presets" gotcha).
+// Lives in an extension so the synthesized memberwise init (used by PresetStore.defaults) stays.
+extension Preset {
+    init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func g<T: Decodable>(_ k: CodingKeys, _ def: T) -> T { (try? c.decode(T.self, forKey: k)) ?? def }
+        id = g(.id, id); name = g(.name, name); model = g(.model, model)
+        ampOn = g(.ampOn, ampOn); ampDrive = g(.ampDrive, ampDrive)
+        gateOn = g(.gateOn, gateOn); gateThr = g(.gateThr, gateThr)
+        compOn = g(.compOn, compOn); compThr = g(.compThr, compThr); compRatio = g(.compRatio, compRatio); compAtk = g(.compAtk, compAtk); compRel = g(.compRel, compRel); compMakeup = g(.compMakeup, compMakeup)
+        driveOn = g(.driveOn, driveOn); driveAmt = g(.driveAmt, driveAmt); driveTone = g(.driveTone, driveTone); driveLevel = g(.driveLevel, driveLevel)
+        eqOn = g(.eqOn, eqOn); bass = g(.bass, bass); mid = g(.mid, mid); treble = g(.treble, treble)
+        delayOn = g(.delayOn, delayOn); delayTime = g(.delayTime, delayTime); delayFb = g(.delayFb, delayFb); delayMix = g(.delayMix, delayMix)
+        reverbOn = g(.reverbOn, reverbOn); reverbDecay = g(.reverbDecay, reverbDecay); reverbDamp = g(.reverbDamp, reverbDamp); reverbMix = g(.reverbMix, reverbMix)
+        output = g(.output, output)
+        boostOn = g(.boostOn, boostOn); boostDb = g(.boostDb, boostDb)
+        driveMode = g(.driveMode, driveMode)
+        chorusOn = g(.chorusOn, chorusOn); chorusRate = g(.chorusRate, chorusRate); chorusDepth = g(.chorusDepth, chorusDepth); chorusMix = g(.chorusMix, chorusMix)
+        flangerOn = g(.flangerOn, flangerOn); flangerRate = g(.flangerRate, flangerRate); flangerDepth = g(.flangerDepth, flangerDepth); flangerFb = g(.flangerFb, flangerFb); flangerMix = g(.flangerMix, flangerMix)
+        tremoloOn = g(.tremoloOn, tremoloOn); tremoloRate = g(.tremoloRate, tremoloRate); tremoloDepth = g(.tremoloDepth, tremoloDepth)
+        reverbType = g(.reverbType, reverbType)
+        order = g(.order, order)
+        pedalOn = g(.pedalOn, pedalOn); pedalModel = g(.pedalModel, pedalModel); pedalDrive = g(.pedalDrive, pedalDrive); pedalLevel = g(.pedalLevel, pedalLevel)
+        cabIR = g(.cabIR, cabIR)
+        irReverbOn = g(.irReverbOn, irReverbOn); irReverbMix = g(.irReverbMix, irReverbMix); irReverbPredelay = g(.irReverbPredelay, irReverbPredelay); irReverbIR = g(.irReverbIR, irReverbIR)
+    }
 }
 
 enum PresetStore {

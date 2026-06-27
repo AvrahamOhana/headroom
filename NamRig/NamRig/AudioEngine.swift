@@ -127,6 +127,8 @@ final class AudioEngine {
     private(set) var pedalStatus = "— empty —"
     private(set) var cabIRName = "None"
     private var cabIRFile = ""
+    private(set) var irReverbName = "None"
+    private var irReverbFile = ""
     private(set) var tunerNote = "—"
     private(set) var tunerCents = 0
     private(set) var tunerActive = false
@@ -175,6 +177,10 @@ final class AudioEngine {
     var reverbDampPct: Double = 30 { didSet { reverb.damp1 = Float(reverbDampPct / 100) * 0.4 } }
     var reverbMixPct: Double = 25 { didSet { reverb.mix = Float(reverbMixPct / 100) } }
 
+    var irReverbEnabled = false { didSet { irReverb.bypass.store(!irReverbEnabled, ordering: .relaxed) } }
+    var irReverbMixPct: Double = 35 { didSet { irReverb.mix = Float(irReverbMixPct / 100) } }
+    var irReverbPredelayMs: Double = 0 { didSet { irReverb.setPredelay(ms: Float(irReverbPredelayMs)) } }
+
     var compEnabled = false { didSet { comp.bypass.store(!compEnabled, ordering: .relaxed) } }
     var compThresholdDb: Double = -18 { didSet { comp.thresholdDb = Float(compThresholdDb) } }
     var compRatio: Double = 4 { didSet { comp.ratio = Float(compRatio) } }
@@ -219,9 +225,9 @@ final class AudioEngine {
     }
 
     // Free-order chain — `blockOrder` is a permutation of all block kinds.
-    static let defaultOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .eq, .chorus, .flanger, .tremolo, .delay, .reverb]
+    static let defaultOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .eq, .chorus, .flanger, .tremolo, .delay, .reverb, .irReverb]
     private var indexByKind: [BlockKind: Int] = [:]
-    var blockOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .eq, .chorus, .flanger, .tremolo, .delay, .reverb]
+    var blockOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .eq, .chorus, .flanger, .tremolo, .delay, .reverb, .irReverb]
     func applyOrder() { context.chain.reorder(blockOrder.compactMap { indexByKind[$0] }) }
     func setOrder(_ newOrder: [BlockKind]) { blockOrder = newOrder; applyOrder() }
     var availableToAdd: [BlockKind] { BlockKind.allCases.filter { !blockOrder.contains($0) } }
@@ -236,10 +242,20 @@ final class AudioEngine {
         case .drive: driveEnabled = on; case .pedal: pedalEnabled = on; case .amp: ampEnabled = on
         case .eq: eqEnabled = on; case .chorus: chorusEnabled = on; case .flanger: flangerEnabled = on
         case .tremolo: tremoloEnabled = on; case .delay: delayEnabled = on; case .reverb: reverbEnabled = on
+        case .irReverb: irReverbEnabled = on
+        }
+    }
+    func isBlockEnabled(_ kind: BlockKind) -> Bool {
+        switch kind {
+        case .gate: return gateEnabled; case .comp: return compEnabled; case .boost: return boostEnabled
+        case .drive: return driveEnabled; case .pedal: return pedalEnabled; case .amp: return ampEnabled
+        case .eq: return eqEnabled; case .chorus: return chorusEnabled; case .flanger: return flangerEnabled
+        case .tremolo: return tremoloEnabled; case .delay: return delayEnabled; case .reverb: return reverbEnabled
+        case .irReverb: return irReverbEnabled
         }
     }
 
-    var modelLoaded: Bool { amp.model != nil }
+    var modelLoaded: Bool { amp.hasModel }
     var inPeakDb: Float { Self.toDb(context.inPeak) }
     var outPeakDb: Float { Self.toDb(context.outPeak) }
     var cpuPercent: Int { max(0, min(999, Int((context.cpuLoad * 100).rounded()))) }
@@ -263,6 +279,7 @@ final class AudioEngine {
     private let flanger = FlangerBlock()
     private let tremolo = TremoloBlock()
     private let pedal = AmpBlock(kind: .pedal)
+    private let irReverb = ReverbIRBlock()
     private var sinkNode: AVAudioSinkNode?
     private var sourceNode: AVAudioSourceNode?
     private var tunerTimer: Timer?
@@ -275,7 +292,7 @@ final class AudioEngine {
     init() {
         refreshModels()
         if !models.contains(where: { $0.id == selectedModelID }) { selectedModelID = models.first?.id ?? selectedModelID }
-        let chainBlocks: [AudioBlock] = [gate, comp, boost, drive, pedal, amp, eq, chorus, flanger, tremolo, delay, reverb]
+        let chainBlocks: [AudioBlock] = [gate, comp, boost, drive, pedal, amp, eq, chorus, flanger, tremolo, delay, reverb, irReverb]
         context.chain.install(chainBlocks)
         for (i, b) in chainBlocks.enumerated() { indexByKind[b.kind] = i }
         applyOrder()
@@ -306,6 +323,7 @@ final class AudioEngine {
         flanger.bypass.store(!flangerEnabled, ordering: .relaxed); flanger.rateHz = Float(flangerRateHz); flanger.depthMs = Float(flangerDepthMs); flanger.feedback = Float(flangerFeedbackPct / 100); flanger.mix = Float(flangerMixPct / 100)
         tremolo.bypass.store(!tremoloEnabled, ordering: .relaxed); tremolo.rateHz = Float(tremoloRateHz); tremolo.depth = Float(tremoloDepthPct / 100)
         pedal.bypass.store(!pedalEnabled, ordering: .relaxed); pedal.inputGain = powf(10, Float(pedalDriveDb) / 20); pedal.makeupGain = powf(10, Float(pedalLevelDb) / 20)
+        irReverb.bypass.store(!irReverbEnabled, ordering: .relaxed); irReverb.mix = Float(irReverbMixPct / 100)
         loadPedalModel()
     }
 
@@ -317,7 +335,7 @@ final class AudioEngine {
 
     func loadModel() {
         guard let tm = models.first(where: { $0.id == selectedModelID }) ?? models.first else {
-            modelStatus = "❌ no models found"; amp.model = nil; return
+            modelStatus = "❌ no models found"; amp.setModel(nil); return
         }
         let model = NAMModel()
         do {
@@ -325,11 +343,11 @@ final class AudioEngine {
             model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
             let probe = selfTest(model)
             model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
-            amp.model = model
+            amp.setModel(model)
             amp.makeupGain = probe.nan ? 1 : max(0.05, min(64, 0.4 / max(probe.peak, 1e-4)))
             modelStatus = "\(tm.name) · raw \(String(format: "%.3f", probe.peak)) · auto \(String(format: "%+.0f", 20 * log10(amp.makeupGain))) dB"
         } catch {
-            amp.model = nil
+            amp.setModel(nil)
             modelStatus = "❌ Load failed: \(error.localizedDescription)"
         }
     }
@@ -339,17 +357,17 @@ final class AudioEngine {
     func loadPedalModel() {
         guard let id = selectedPedalModelID, !id.isEmpty,
               let tm = models.first(where: { $0.id == id }) else {
-            pedal.model = nil; pedalStatus = "— empty —"; return
+            pedal.setModel(nil); pedalStatus = "— empty —"; return
         }
         let model = NAMModel()
         do {
             try model.loadModel(fromPath: tm.path)
             model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
-            pedal.model = model
+            pedal.setModel(model)
             pedal.makeupGain = powf(10, Float(pedalLevelDb) / 20)
             pedalStatus = tm.name
         } catch {
-            pedal.model = nil
+            pedal.setModel(nil)
             pedalStatus = "❌ Load failed"
         }
     }
@@ -377,8 +395,37 @@ final class AudioEngine {
             cabIRFile = file; cabIRName = url.deletingPathExtension().lastPathComponent; amp.setIR(taps)
         } else { clearCabIR() }
     }
-    /// Load a (cab) IR .wav → mono, resampled to the engine rate, ≤2048 taps, L1-normalized (no added gain).
-    static func loadIRSamples(_ url: URL, targetSR: Double) -> [Float]? {
+    func loadReverbIR(from url: URL) {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        guard let taps = Self.loadReverbIRSamples(url, targetSR: preferredSampleRate), !taps.isEmpty else {
+            modelStatus = "❌ Reverb IR load failed"; return
+        }
+        let dest = irsDir.appendingPathComponent(url.lastPathComponent)
+        try? FileManager.default.removeItem(at: dest)
+        try? FileManager.default.copyItem(at: url, to: dest)
+        irReverbFile = url.lastPathComponent
+        irReverbName = url.deletingPathExtension().lastPathComponent
+        irReverb.setIR(taps)
+    }
+    func clearReverbIR() { irReverbFile = ""; irReverbName = "None"; irReverb.clearIR() }
+    private func applyReverbIR(_ file: String) {
+        guard !file.isEmpty else { clearReverbIR(); return }
+        let url = irsDir.appendingPathComponent(file)
+        if let taps = Self.loadReverbIRSamples(url, targetSR: preferredSampleRate), !taps.isEmpty {
+            irReverbFile = file; irReverbName = url.deletingPathExtension().lastPathComponent; irReverb.setIR(taps)
+        } else { clearReverbIR() }
+    }
+    /// Reverb IR loader — long (≤64000 taps ≈ 1.3 s) and L2/energy-normalized (consistent loudness vs length).
+    static func loadReverbIRSamples(_ url: URL, targetSR: Double) -> [Float]? {
+        guard var x = loadIRSamples(url, targetSR: targetSR, cap: 64000, normalizeL1: false), !x.isEmpty else { return nil }
+        let e = sqrtf(x.reduce(Float(0)) { $0 + $1 * $1 })
+        if e > 1e-9 { for i in x.indices { x[i] *= 1 / e } }
+        return x
+    }
+
+    /// Load a (cab) IR .wav → mono, resampled to the engine rate, ≤`cap` taps, L1-normalized if requested.
+    static func loadIRSamples(_ url: URL, targetSR: Double, cap: Int = 2048, normalizeL1: Bool = true) -> [Float]? {
         guard let f = try? AVAudioFile(forReading: url),
               let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: AVAudioFrameCount(f.length)),
               (try? f.read(into: buf)) != nil, let ch = buf.floatChannelData, buf.frameLength > 0 else { return nil }
@@ -395,9 +442,11 @@ final class AudioEngine {
             }
             x = y
         }
-        if x.count > 2048 { x = Array(x[0..<2048]) }
-        let l1 = x.reduce(Float(0)) { $0 + abs($1) }
-        if l1 > 1e-6 { for i in x.indices { x[i] *= 1 / l1 } }
+        if x.count > cap { x = Array(x[0..<cap]) }
+        if normalizeL1 {
+            let l1 = x.reduce(Float(0)) { $0 + abs($1) }
+            if l1 > 1e-6 { for i in x.indices { x[i] *= 1 / l1 } }
+        }
         return x
     }
 
@@ -432,6 +481,29 @@ final class AudioEngine {
     func nextPreset() { guard !presets.isEmpty else { return }; loadPreset(at: (currentPresetIndex + 1) % presets.count) }
     func prevPreset() { guard !presets.isEmpty else { return }; loadPreset(at: (currentPresetIndex - 1 + presets.count) % presets.count) }
 
+    // MARK: - Live mode + MIDI hooks
+
+    static let liveBankSize = 4
+    var bankIndex: Int { presets.isEmpty ? 0 : currentPresetIndex / Self.liveBankSize }
+    var sceneInBank: Int { currentPresetIndex % Self.liveBankSize }
+    func handleProgramChange(_ pc: Int) { loadPreset(at: pc) }   // loadPreset already range-guards
+
+    /// MIDI CC → engine param (0…1 normalized into the param's range). Reuses the existing didSet→block path.
+    func setParam(_ p: MIDIParam, normalized: Double) {
+        let r = p.range
+        let v = r.lowerBound + (r.upperBound - r.lowerBound) * max(0, min(1, normalized))
+        switch p {
+        case .ampDrive: inputDriveDb = v;   case .output: outputLevelDb = v;   case .gateThr: gateThresholdDb = v
+        case .bass: bassDb = v;             case .mid: midDb = v;              case .treble: trebleDb = v
+        case .driveAmt: driveAmount = v;    case .driveLevel: driveLevelDb = v
+        case .delayMix: delayMixPct = v;    case .delayFb: delayFeedbackPct = v
+        case .reverbMix: reverbMixPct = v;  case .reverbDecay: reverbDecayPct = v
+        case .compMakeup: compMakeupDb = v; case .boostDb: boostDb = v
+        case .pedalDrive: pedalDriveDb = v; case .pedalLevel: pedalLevelDb = v
+        case .chorusMix: chorusMixPct = v;  case .flangerMix: flangerMixPct = v; case .tremoloDepth: tremoloDepthPct = v
+        }
+    }
+
     func saveCurrent(as name: String) {
         let p = capture(name: name.isEmpty ? "Preset \(presets.count + 1)" : name)
         presets.append(p); currentPresetIndex = presets.count - 1; PresetStore.save(presets)
@@ -460,7 +532,8 @@ final class AudioEngine {
                reverbType: reverbType,
                order: blockOrder.map { $0.rawValue },
                pedalOn: pedalEnabled, pedalModel: selectedPedalModelID ?? "", pedalDrive: pedalDriveDb, pedalLevel: pedalLevelDb,
-               cabIR: cabIRFile)
+               cabIR: cabIRFile,
+               irReverbOn: irReverbEnabled, irReverbMix: irReverbMixPct, irReverbPredelay: irReverbPredelayMs, irReverbIR: irReverbFile)
     }
     private func apply(_ p: Preset) {
         let changed = p.model != selectedModelID
@@ -486,6 +559,8 @@ final class AudioEngine {
         pedalEnabled = p.pedalOn; pedalDriveDb = p.pedalDrive; pedalLevelDb = p.pedalLevel
         selectedPedalModelID = p.pedalModel.isEmpty ? nil : p.pedalModel
         applyCabIR(p.cabIR)
+        irReverbEnabled = p.irReverbOn; irReverbMixPct = p.irReverbMix; irReverbPredelayMs = p.irReverbPredelay
+        applyReverbIR(p.irReverbIR)
     }
 
     // MARK: - Audio

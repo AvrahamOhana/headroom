@@ -8,8 +8,8 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-private enum ChainBlock: String, CaseIterable, Identifiable {
-    case gate, comp, boost, drive, pedal, amp, eq, chorus, flanger, tremolo, delay, reverb
+enum ChainBlock: String, CaseIterable, Identifiable {
+    case gate, comp, boost, drive, pedal, amp, eq, chorus, flanger, tremolo, delay, reverb, irReverb
     var id: String { rawValue }
 
     var kind: BlockKind {
@@ -17,7 +17,7 @@ private enum ChainBlock: String, CaseIterable, Identifiable {
         case .gate: return .gate; case .comp: return .comp; case .boost: return .boost; case .drive: return .drive
         case .pedal: return .pedal; case .amp: return .amp; case .eq: return .eq
         case .chorus: return .chorus; case .flanger: return .flanger; case .tremolo: return .tremolo
-        case .delay: return .delay; case .reverb: return .reverb
+        case .delay: return .delay; case .reverb: return .reverb; case .irReverb: return .irReverb
         }
     }
     init?(_ k: BlockKind) {
@@ -25,7 +25,7 @@ private enum ChainBlock: String, CaseIterable, Identifiable {
         case .gate: self = .gate; case .comp: self = .comp; case .boost: self = .boost; case .drive: self = .drive
         case .pedal: self = .pedal; case .amp: self = .amp; case .eq: self = .eq
         case .chorus: self = .chorus; case .flanger: self = .flanger; case .tremolo: self = .tremolo
-        case .delay: self = .delay; case .reverb: self = .reverb
+        case .delay: self = .delay; case .reverb: self = .reverb; case .irReverb: self = .irReverb
         }
     }
 
@@ -33,28 +33,28 @@ private enum ChainBlock: String, CaseIterable, Identifiable {
         switch self {
         case .gate: return "GATE"; case .comp: return "COMP"; case .boost: return "BST"; case .drive: return "DRV"
         case .pedal: return "PED"; case .amp: return "AMP"; case .eq: return "EQ"; case .chorus: return "CHO"; case .flanger: return "FLG"
-        case .tremolo: return "TRM"; case .delay: return "DLY"; case .reverb: return "RVB"
+        case .tremolo: return "TRM"; case .delay: return "DLY"; case .reverb: return "RVB"; case .irReverb: return "IRV"
         }
     }
     var full: String {
         switch self {
         case .gate: return "Noise Gate"; case .comp: return "Compressor"; case .boost: return "Clean Boost"; case .drive: return "Drive"
         case .pedal: return "Pedal"; case .amp: return "Amp"; case .eq: return "EQ"; case .chorus: return "Chorus"; case .flanger: return "Flanger"
-        case .tremolo: return "Tremolo"; case .delay: return "Delay"; case .reverb: return "Reverb"
+        case .tremolo: return "Tremolo"; case .delay: return "Delay"; case .reverb: return "Reverb"; case .irReverb: return "IR Reverb"
         }
     }
     var icon: String {
         switch self {
         case .gate: return "waveform.path.ecg"; case .comp: return "dial.medium"; case .boost: return "bolt.fill"; case .drive: return "flame.fill"
         case .pedal: return "dial.low.fill"; case .amp: return "amplifier"; case .eq: return "slider.vertical.3"; case .chorus: return "water.waves"; case .flanger: return "wind"
-        case .tremolo: return "metronome"; case .delay: return "timer"; case .reverb: return "drop.fill"
+        case .tremolo: return "metronome"; case .delay: return "timer"; case .reverb: return "drop.fill"; case .irReverb: return "square.stack.3d.down.right.fill"
         }
     }
     var color: Color {
         switch self {
         case .gate: return .teal; case .comp: return .blue; case .boost: return .yellow; case .drive: return .orange
         case .pedal: return .brown; case .amp: return .red; case .eq: return .green; case .chorus: return .mint; case .flanger: return .indigo
-        case .tremolo: return .pink; case .delay: return .purple; case .reverb: return .cyan
+        case .tremolo: return .pink; case .delay: return .purple; case .reverb: return .cyan; case .irReverb: return .cyan
         }
     }
 }
@@ -69,9 +69,13 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showImporter = false
     @State private var showIRImporter = false
+    @State private var showRevIRImporter = false
     @State private var t3kBrowse: T3KBrowser.Target? = nil   // non-nil → present browser for that slot
     @State private var showManage = false
     @State private var showReorder = false
+    @State private var showLive = false
+    @State private var showMIDI = false
+    @State private var midi = MIDIManager()
     private var isRunning: Bool { audio.state == .running }
 
     var body: some View {
@@ -89,7 +93,7 @@ struct ContentView: View {
             .padding(.horizontal, 18)
             .padding(.bottom, 24)
         }
-        .onAppear { audio.applyCurrentPreset(); audio.start() }
+        .onAppear { audio.applyCurrentPreset(); audio.start(); midi.start(engine: audio) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { if audio.state == .stopped { audio.start() } }
             else if phase == .background { audio.stop() }
@@ -102,11 +106,16 @@ struct ContentView: View {
         .sheet(isPresented: $showTuner) { tunerSheet }
         .sheet(isPresented: $showSettings) { settingsSheet }
         .sheet(isPresented: $showReorder) { reorderSheet }
+        .sheet(isPresented: $showMIDI) { midiSheet }
+        .fullScreenCover(isPresented: $showLive) { LiveView(audio: audio, onExit: { showLive = false }, onTuner: { showLive = false; showTuner = true }) }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [UTType(filenameExtension: "nam") ?? .data]) { result in
             if case .success(let url) = result { audio.importModel(from: url) }
         }
         .fileImporter(isPresented: $showIRImporter, allowedContentTypes: [.wav, .aiff, .audio]) { result in
             if case .success(let url) = result { audio.loadCabIR(from: url) }
+        }
+        .fileImporter(isPresented: $showRevIRImporter, allowedContentTypes: [.wav, .aiff, .audio]) { result in
+            if case .success(let url) = result { audio.loadReverbIR(from: url) }
         }
         .sheet(item: $t3kBrowse) { target in T3KBrowser(audio: audio, target: target) }
         .sheet(isPresented: $showManage) { manageSheet }
@@ -120,6 +129,8 @@ struct ContentView: View {
             Spacer()
             cpuBadge
             Button { showTuner = true } label: { Image(systemName: "tuningfork").font(.title3) }.buttonStyle(.plain)
+            Button { showMIDI = true } label: { Image(systemName: "pianokeys").font(.title3) }.buttonStyle(.plain)
+            Button { showLive = true } label: { Image(systemName: "tv").font(.title3) }.buttonStyle(.plain)
             Button { showSettings = true } label: { Image(systemName: "gearshape").font(.title3) }.buttonStyle(.plain)
             Button(action: audio.toggle) {
                 Image(systemName: isRunning ? "power.circle.fill" : "power.circle")
@@ -376,6 +387,20 @@ struct ContentView: View {
             sliderRow("Decay", value: $audio.reverbDecayPct, range: 0...100, unit: "%")
             sliderRow("Damping", value: $audio.reverbDampPct, range: 0...100, unit: "%")
             sliderRow("Mix", value: $audio.reverbMixPct, range: 0...100, unit: "%")
+        case .irReverb:
+            HStack(spacing: 8) {
+                Image(systemName: "square.stack.3d.down.right.fill").foregroundStyle(.secondary)
+                Text(audio.irReverbName).font(.subheadline).lineLimit(1)
+                Spacer()
+                if audio.irReverbName != "None" {
+                    Button { audio.clearReverbIR() } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+                Button { showRevIRImporter = true } label: { Label("Load IR", systemImage: "square.and.arrow.down") }.font(.subheadline)
+            }
+            .padding(.vertical, 7).padding(.horizontal, 10)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            sliderRow("Predelay", value: $audio.irReverbPredelayMs, range: 0...200, unit: "ms")
+            sliderRow("Mix", value: $audio.irReverbMixPct, range: 0...100, unit: "%")
         }
     }
 
@@ -384,7 +409,7 @@ struct ContentView: View {
         case .gate: return audio.gateEnabled; case .comp: return audio.compEnabled; case .boost: return audio.boostEnabled
         case .drive: return audio.driveEnabled; case .pedal: return audio.pedalEnabled; case .amp: return audio.ampEnabled; case .eq: return audio.eqEnabled
         case .chorus: return audio.chorusEnabled; case .flanger: return audio.flangerEnabled; case .tremolo: return audio.tremoloEnabled
-        case .delay: return audio.delayEnabled; case .reverb: return audio.reverbEnabled
+        case .delay: return audio.delayEnabled; case .reverb: return audio.reverbEnabled; case .irReverb: return audio.irReverbEnabled
         }
     }
     private func enabled(_ b: ChainBlock) -> Binding<Bool> {
@@ -392,7 +417,7 @@ struct ContentView: View {
         case .gate: return $audio.gateEnabled; case .comp: return $audio.compEnabled; case .boost: return $audio.boostEnabled
         case .drive: return $audio.driveEnabled; case .pedal: return $audio.pedalEnabled; case .amp: return $audio.ampEnabled; case .eq: return $audio.eqEnabled
         case .chorus: return $audio.chorusEnabled; case .flanger: return $audio.flangerEnabled; case .tremolo: return $audio.tremoloEnabled
-        case .delay: return $audio.delayEnabled; case .reverb: return $audio.reverbEnabled
+        case .delay: return $audio.delayEnabled; case .reverb: return $audio.reverbEnabled; case .irReverb: return $audio.irReverbEnabled
         }
     }
 
@@ -463,6 +488,69 @@ struct ContentView: View {
     }
 
     // MARK: - Settings sheet (metrics)
+
+    private var midiSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Sources") {
+                    if midi.sources.isEmpty {
+                        Label("No MIDI devices connected", systemImage: "pianokeys").foregroundStyle(.red)
+                    } else {
+                        ForEach(midi.sources, id: \.self) { Label($0, systemImage: "pianokeys.inverse") }
+                    }
+                    HStack {
+                        Text("Messages received").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(midi.lastActivity)").font(.caption.monospacedDigit()).foregroundStyle(midi.lastActivity > 0 ? .green : .secondary)
+                    }
+                    Text("Program Change selects preset 1–\(max(audio.presets.count, 1)). Move a control to test reception.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Channel") {
+                    Picker("MIDI channel", selection: Binding(get: { midi.channelFilter ?? 0 }, set: { midi.channelFilter = $0 == 0 ? nil : $0 })) {
+                        Text("Omni").tag(0)
+                        ForEach(1...16, id: \.self) { Text("\($0)").tag($0) }
+                    }
+                }
+                Section("CC mappings") {
+                    if midi.mappings.isEmpty {
+                        Text("No mappings yet. Add one, then move a knob/footswitch to learn it.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach($midi.mappings) { $m in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(m.target.label).font(.subheadline.weight(.semibold))
+                            HStack {
+                                Stepper("CC \(m.cc)", value: $m.cc, in: 0...127).fixedSize()
+                                Spacer()
+                                Button { midi.beginLearn(m.id) } label: { Label("Learn", systemImage: "dot.radiowaves.left.and.right") }
+                                    .buttonStyle(.bordered).controlSize(.small)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .onDelete { idx in idx.map { midi.mappings[$0].id }.forEach { midi.removeMapping($0) } }
+                    Menu {
+                        Button("Next preset") { midi.addMapping(.presetNext) }
+                        Button("Previous preset") { midi.addMapping(.presetPrev) }
+                        Menu("Parameter") { ForEach(MIDIParam.allCases) { p in Button(p.label) { midi.addMapping(.param(p)) } } }
+                        Menu("Block on/off") { ForEach(BlockKind.allCases, id: \.self) { k in Button(k.rawValue) { midi.addMapping(.blockToggle(k.rawValue)) } } }
+                    } label: { Label("Add mapping", systemImage: "plus") }
+                }
+            }
+            .navigationTitle("MIDI")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showMIDI = false } } }
+            .overlay {
+                if midi.learnMappingID != nil {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Move a control to learn its CC").font(.headline).multilineTextAlignment(.center)
+                        Button("Cancel") { midi.cancelLearn() }.buttonStyle(.bordered)
+                    }
+                    .padding(28).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16)).padding()
+                }
+            }
+        }
+    }
 
     private var settingsSheet: some View {
         NavigationStack {
