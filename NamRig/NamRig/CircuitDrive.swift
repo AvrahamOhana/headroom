@@ -4,18 +4,23 @@
 //
 //  One DSP engine + a data table (`PedalModel`) = the whole library. Unlike the generic
 //  `DriveBlock` (one tanh/clip/fuzz shape), `CircuitDriveBlock` models the *topology* of real
-//  pedal circuits, and the clip stage genuinely BRANCHES in code — three different algorithms,
+//  pedal circuits, and the clip stage genuinely BRANCHES in code — four different algorithms,
 //  not value presets:
 //
-//     • softFeedback  y = x + Vf·tanh(g·x/Vf)        (op-amp + diodes in the FEEDBACK loop: TS,
-//                                                      cascaded for the Big Muff). Small signals see
-//                                                      gain (1+g); large signals see incremental gain
-//                                                      ~1 → a compander → sustain. NOT bounded-limiting.
+//     • softFeedback  y = x + Vf·tanh(g·x/Vf)        (op-amp + diodes in the FEEDBACK loop: TS).
+//                                                      Small signals see gain (1+g); large signals see
+//                                                      incremental gain ~1 → a compander → sustain.
+//                                                      Keeps the clean ramp underneath → NOT bounded.
+//     • softBounded   y = Vf·tanh(g·x/Vf)            (cascaded saturating stages: Big Muff). Drops the
+//                                                      +x term so the output SATURATES toward ±Vf →
+//                                                      compression / infinite sustain (the Muff's tell).
 //     • hardShunt     y = Vf·clip(g·x/Vf)            (diodes to GROUND after the gain stage: RAT, DS-1).
 //                                                      Hard clamp at ±Vf → square-ish, strong high-order
 //                                                      odd harmonics.
-//     • asym          y = x≥0 ? Vp·tanh(g·x/Vp)      (germanium, different drop per half: Klon). Produces
-//                            : Vn·tanh(g·x/Vn)        a DC offset → DC blocker after it.
+//     • asym          y = x + Vp·tanh(g·x/Vp)  (x≥0) (germanium soft-feedback, different drop per half:
+//                      y = x + Vn·tanh(g·x/Vn)  (x<0)  Klon). Clean is intrinsic (slope ~1 for small x);
+//                                                      only peaks get even-harmonic grit. Asymmetric →
+//                                                      small DC → DC blocker after it.
 //
 //  Signal flow (per the FX roadmap "Overdrive library" section):
 //     input HPF (mid-hump / low cleanup)
@@ -23,6 +28,8 @@
 //       → drive gain → FIXED-threshold clipper      [wrapped in Oversampler + ADAA1: 2× soft, 8× hard]
 //       → DC blocker (one-pole ~19 Hz, asymmetric models only)
 //       → tone biquads (per voicing)
+//       → post-clip SMOOTHING LPF (~10 kHz, every model — stops the top-octave fizz from folding
+//         DOWN into the audible band through the downstream nonlinear NAM amp)
 //       → output level.
 //
 //  The nonlinearity is the ONLY thing oversampled (the filters are linear → no aliasing, stay at
@@ -49,14 +56,14 @@ import Accelerate
 // ============================================================================================
 
 /// How the clip stage is wired — a genuinely different algorithm per case (see file header).
-nonisolated enum ClipMode: Sendable { case softFeedback, hardShunt, asym }
+nonisolated enum ClipMode: Sendable { case softFeedback, softBounded, hardShunt, asym }
 
 /// Post-clip tone-stack voicing. Each maps the 0…1 `tone` knob to its own filter behavior.
 nonisolated enum ToneType: Sendable {
-    case lowpassTilt   // TS: post LPF (swept) + mild high-shelf tilt
+    case lowpassTilt   // TS: post LPF (swept) + treble roll + a fixed mid-hump
     case ratFilter     // RAT: single LPF that DARKENS as the knob is turned up (inverted sweep)
     case scoopTilt     // DS-1: bass/treble tilt (two shelves) + a fixed mid scoop
-    case klonTilt      // Klon: treble-tilt high shelf only
+    case klonTilt      // Klon: treble-tilt high shelf + a fixed amp-protect LPF
     case muffScoop     // Big Muff: fixed mid SCOOP (~-13.5 dB @1 kHz) + a bright/dark LPF sweep
 }
 
@@ -80,40 +87,49 @@ nonisolated struct PedalModel: Sendable {
     let needsDC: Bool            // DC blocker after the nonlinearity (asymmetric circuits)
 
     /// The library, in selector order. Indices are stable (presets store the int).
+    //
+    //  Gain-staging note: ranges are deliberately TAME. A normal -12 dBFS guitar note peaks ~0.25,
+    //  and the clip knee is at x_th = Vf/g; the lower bound is chosen so drive 0 puts the knee at/above
+    //  a clean note (the note "breathes" and tracks pick force), and the hi/lo ratio is kept small so
+    //  the clean→crunch→square transition spreads across the knob instead of collapsing in the first
+    //  10 %. Hotter ranges sound identical to these at the top (a square is a square) but kill pick
+    //  dynamics and only add aliasing — so we don't use them.
     static let all: [PedalModel] = [
-        // 0 — Green Screamer (TS808): mid-hump HPF → soft Si-in-feedback → the BRIGHTEST/most open
-        //     top of the library (soft clip keeps it fundamental-dominated) + slight presence tilt.
-        PedalModel(name: "Green Screamer", inputHz: 720, gainRange: 2...90, clip: .softFeedback,
+        // 0 — Green Screamer (TS808): mid-hump HPF → soft Si-in-feedback → MID-FORWARD tone (rolled
+        //     highs + a ~720 Hz hump), the classic TS voice. Soft clip keeps it fundamental-dominated.
+        PedalModel(name: "Green Screamer", inputHz: 600, gainRange: 1.5...45, clip: .softFeedback,
                    diodeVf: 0.6, asymVf: 0.6, feedbackCapHz: 0, tone: .lowpassTilt,
-                   toneLoHz: 2500, toneHiHz: 8000, scoopHz: 0, scoopDb: 0,
-                   makeup: 0.55, oversample: 2, stages: 1, needsDC: false),
+                   toneLoHz: 700, toneHiHz: 2200, scoopHz: 0, scoopDb: 0,
+                   makeup: 0.65, oversample: 2, stages: 1, needsDC: false),
 
-        // 1 — Rodent (RAT): light HPF → very-high gain + feedback-cap treble roll → hard Si to ground →
-        //     "Filter" LPF (darker as it's turned up). Darker top than the TS. 8× OS.
-        PedalModel(name: "Rodent", inputHz: 32, gainRange: 6...800, clip: .hardShunt,
+        // 1 — Rodent (RAT): light HPF → high gain + feedback-cap treble roll → hard Si to ground →
+        //     "Filter" LPF (darker as it's turned up). Darker top than the TS. 8× OS. REFERENCE voicing.
+        PedalModel(name: "Rodent", inputHz: 32, gainRange: 2.5...75, clip: .hardShunt,
                    diodeVf: 0.6, asymVf: 0.6, feedbackCapHz: 2400, tone: .ratFilter,
                    toneLoHz: 700, toneHiHz: 4500, scoopHz: 0, scoopDb: 0,
-                   makeup: 0.32, oversample: 8, stages: 1, needsDC: false),
+                   makeup: 0.42, oversample: 8, stages: 1, needsDC: false),
 
         // 2 — Modern Distortion (DS-1): two-stage gain → hard Si clip → tone LPF + treble tilt + mid
-        //     scoop. Darker top than the TS. 8× OS.
-        PedalModel(name: "Modern Distortion", inputHz: 50, gainRange: 8...500, clip: .hardShunt,
+        //     scoop. A touch of bite, but not fizzy (the treble shelf is capped). 8× OS.
+        PedalModel(name: "Modern Distortion", inputHz: 50, gainRange: 3...90, clip: .hardShunt,
                    diodeVf: 0.6, asymVf: 0.6, feedbackCapHz: 5000, tone: .scoopTilt,
-                   toneLoHz: 1500, toneHiHz: 4000, scoopHz: 600, scoopDb: -7,
-                   makeup: 0.36, oversample: 8, stages: 1, needsDC: false),
+                   toneLoHz: 1500, toneHiHz: 4500, scoopHz: 600, scoopDb: -7,
+                   makeup: 0.42, oversample: 8, stages: 1, needsDC: false),
 
-        // 3 — Centaur Gold (Klon): parallel CLEAN + clipped(Ge soft asym) branches, treble tilt.
-        //     Clean branch is delay-matched to the OS/ADAA wet (no comb). 4× OS.
-        PedalModel(name: "Centaur Gold", inputHz: 40, gainRange: 3...120, clip: .asym,
+        // 3 — Centaur Gold (Klon): soft-feedback Ge ASYM clip — the clean ramp is INTRINSIC (slope ~1
+        //     for small signals, grit only on peaks), so quiet notes stay clean/transparent. Low gain.
+        //     Treble tilt + amp-protect LPF. 4× OS.
+        PedalModel(name: "Centaur Gold", inputHz: 40, gainRange: 1...30, clip: .asym,
                    diodeVf: 0.30, asymVf: 0.38, feedbackCapHz: 0, tone: .klonTilt,
                    toneLoHz: 0, toneHiHz: 3000, scoopHz: 0, scoopDb: 0,
-                   makeup: 0.70, oversample: 4, stages: 1, needsDC: true),
+                   makeup: 0.50, oversample: 4, stages: 1, needsDC: true),
 
-        // 4 — Muffin Fuzz (Big Muff): two cascaded soft-clip stages → mid SCOOP ~-13.5 dB @1 kHz. 8× OS.
-        PedalModel(name: "Muffin Fuzz", inputHz: 80, gainRange: 10...300, clip: .softFeedback,
+        // 4 — Muffin Fuzz (Big Muff): two cascaded BOUNDED soft-clip stages → SATURATION / infinite
+        //     sustain → mid SCOOP ~-13.5 dB @1 kHz, dark top. Symmetric → no DC. 8× OS.
+        PedalModel(name: "Muffin Fuzz", inputHz: 80, gainRange: 4...120, clip: .softBounded,
                    diodeVf: 0.6, asymVf: 0.6, feedbackCapHz: 0, tone: .muffScoop,
-                   toneLoHz: 800, toneHiHz: 6000, scoopHz: 1000, scoopDb: -13.5,
-                   makeup: 0.40, oversample: 8, stages: 2, needsDC: true),
+                   toneLoHz: 800, toneHiHz: 4500, scoopHz: 1000, scoopDb: -13.5,
+                   makeup: 0.50, oversample: 8, stages: 2, needsDC: false),
     ]
 }
 
@@ -159,6 +175,7 @@ final class CircuitDriveBlock: AudioBlock {
     private var inputHP = Biquad()
     private var preLP = Biquad()
     private var bq0 = Biquad(), bq1 = Biquad(), bq2 = Biquad()   // tone stack (always 3, identity if unused)
+    private var smoothLP = Biquad()                             // global post-clip anti-fizz LPF (~10 kHz)
     private var dcX1: Float = 0, dcY1: Float = 0
     private var adaaA = ADAA1(), adaaB = ADAA1()
 
@@ -194,7 +211,7 @@ final class CircuitDriveBlock: AudioBlock {
     }
 
     override func reset() {
-        inputHP.reset(); preLP.reset(); bq0.reset(); bq1.reset(); bq2.reset()
+        inputHP.reset(); preLP.reset(); bq0.reset(); bq1.reset(); bq2.reset(); smoothLP.reset()
         dcX1 = 0; dcY1 = 0
         adaaA.reset(); adaaB.reset()
         os2.reset(); os4.reset(); os8.reset()
@@ -230,9 +247,9 @@ final class CircuitDriveBlock: AudioBlock {
         hasPreLP = m.feedbackCapHz > 0
         osLatency = osFactor == 8 ? os8.latencySamples : (osFactor == 4 ? os4.latencySamples : os2.latencySamples)
 
-        // Klon parallel blend (drive raises the clipped amount on top of an always-present clean).
-        if m.clip == .asym { cleanMix = 1; wetMix = lerp(0.0, 0.8, d) }
-        else { cleanMix = 0; wetMix = 1 }
+        // Klon's clean is now INTRINSIC to the soft-feedback asym shape (the +x term), so we run a
+        // pure wet path — no parallel-clean blend needed. The ring path stays available but inert.
+        cleanMix = 0; wetMix = 1
 
         outGain = m.makeup * min(max(0, level), 1)
 
@@ -243,30 +260,37 @@ final class CircuitDriveBlock: AudioBlock {
 
         // Tone stack.
         switch m.tone {
-        case .lowpassTilt:   // TS — swept LPF darkens toward 0, plus a mild brightness tilt.
+        case .lowpassTilt:   // TS — swept LPF darkens toward 0, treble roll, + a fixed ~720 Hz mid-hump.
             bq0.setLowpass(freq: lerp(m.toneLoHz, m.toneHiHz, t), q: 0.707, sr: sr)
-            bq1.setHighShelf(freq: 2000, gainDb: 3, sr: sr)
-            setIdentity(&bq2)
+            bq1.setHighShelf(freq: 3000, gainDb: -2.5, sr: sr)
+            bq2.setPeaking(freq: 720, gainDb: 3, q: 0.7, sr: sr)
         case .ratFilter:     // RAT — turning UP darkens (inverted LPF sweep).
             bq0.setLowpass(freq: lerp(m.toneHiHz, m.toneLoHz, t), q: 0.707, sr: sr)
             setIdentity(&bq1); setIdentity(&bq2)
-        case .scoopTilt:     // DS-1 — tone LPF sweep + treble tilt + fixed mid scoop.
+        case .scoopTilt:     // DS-1 — tone LPF sweep + (capped) treble tilt + fixed mid scoop.
             bq0.setLowpass(freq: lerp(m.toneLoHz, m.toneHiHz, t), q: 0.707, sr: sr)
-            bq1.setHighShelf(freq: 3000, gainDb: lerp(-6, 6, t), sr: sr)
+            bq1.setHighShelf(freq: 3000, gainDb: lerp(-5, 4, t), sr: sr)
             bq2.setPeaking(freq: m.scoopHz, gainDb: m.scoopDb, q: 1.0, sr: sr)
-        case .klonTilt:      // Klon — treble tilt.
-            bq0.setHighShelf(freq: m.toneHiHz, gainDb: lerp(-3, 8, t), sr: sr)
-            setIdentity(&bq1); setIdentity(&bq2)
+        case .klonTilt:      // Klon — (capped) treble tilt + a fixed amp-protect LPF before the amp.
+            bq0.setHighShelf(freq: m.toneHiHz, gainDb: lerp(-3, 4, t), sr: sr)
+            bq1.setLowpass(freq: min(8500, sr * 0.45), q: 0.707, sr: sr)
+            setIdentity(&bq2)
         case .muffScoop:     // Big Muff — fixed ~-13.5 dB scoop @1 kHz + a bright/dark LPF sweep.
             bq0.setPeaking(freq: m.scoopHz, gainDb: m.scoopDb, q: 0.9, sr: sr)
             bq1.setLowpass(freq: lerp(m.toneLoHz, m.toneHiHz, t), q: 0.707, sr: sr)
             setIdentity(&bq2)
         }
 
-        if resetFilters { inputHP.reset(); preLP.reset(); bq0.reset(); bq1.reset(); bq2.reset() }
+        // Global post-clip smoothing LPF — inaudible in the guitar band, but it removes the top-octave
+        // content (genuine HF + residual decimation alias) BEFORE the nonlinear NAM amp folds it down
+        // into the audible band as harsh intermodulation "fizz". Applied on EVERY model.
+        smoothLP.setLowpass(freq: min(10000, sr * 0.45), q: 0.707, sr: sr)
+
+        if resetFilters { inputHP.reset(); preLP.reset(); bq0.reset(); bq1.reset(); bq2.reset(); smoothLP.reset() }
     }
 
     // ---- Clip shapers + their antiderivatives (ADAA1, inlined, no closures) -------------------
+    // softFeedback: y = x + Vf·tanh(g·x/Vf)  (clean ramp kept underneath → compander, NOT bounded).
     @inline(__always) private func softShapeA(_ x: Float) -> Float { x + vf * tanhf(g * x / vf) }
     @inline(__always) private func softF1A(_ x: Float) -> Float { 0.5 * x * x + (vf * vf / g) * ADAA1.lnCosh(g * x / vf) }
     private func softStepA(_ x: Float) -> Float {
@@ -281,6 +305,21 @@ final class CircuitDriveBlock: AudioBlock {
         let y = abs(dx) < ADAA1.eps ? softShapeB((x + p) * 0.5) : (softF1B(x) - softF1B(p)) / dx
         adaaB.prevX = x; return y
     }
+    // softBounded: y = Vf·tanh(g·x/Vf)  (drops the +x term → SATURATES toward ±Vf → sustain. Big Muff).
+    @inline(__always) private func bndShapeA(_ x: Float) -> Float { vf * tanhf(g * x / vf) }
+    @inline(__always) private func bndF1A(_ x: Float) -> Float { (vf * vf / g) * ADAA1.lnCosh(g * x / vf) }
+    private func bndStepA(_ x: Float) -> Float {
+        let p = adaaA.prevX, dx = x - p
+        let y = abs(dx) < ADAA1.eps ? bndShapeA((x + p) * 0.5) : (bndF1A(x) - bndF1A(p)) / dx
+        adaaA.prevX = x; return y
+    }
+    @inline(__always) private func bndShapeB(_ x: Float) -> Float { vf * tanhf(g2 * x / vf) }
+    @inline(__always) private func bndF1B(_ x: Float) -> Float { (vf * vf / g2) * ADAA1.lnCosh(g2 * x / vf) }
+    private func bndStepB(_ x: Float) -> Float {
+        let p = adaaB.prevX, dx = x - p
+        let y = abs(dx) < ADAA1.eps ? bndShapeB((x + p) * 0.5) : (bndF1B(x) - bndF1B(p)) / dx
+        adaaB.prevX = x; return y
+    }
     @inline(__always) private func hardShape(_ x: Float) -> Float { vf * ADAA1.hardClip(g * x / vf) }
     @inline(__always) private func hardF1(_ x: Float) -> Float { (vf * vf / g) * ADAA1.clipF1(g * x / vf) }
     private func hardStep(_ x: Float) -> Float {
@@ -288,11 +327,13 @@ final class CircuitDriveBlock: AudioBlock {
         let y = abs(dx) < ADAA1.eps ? hardShape((x + p) * 0.5) : (hardF1(x) - hardF1(p)) / dx
         adaaA.prevX = x; return y
     }
+    // asym (Klon): soft-feedback per half → clean ramp INTRINSIC, even-harmonic grit only on peaks.
     @inline(__always) private func asymShape(_ x: Float) -> Float {
-        x >= 0 ? vf * tanhf(g * x / vf) : vfNeg * tanhf(g * x / vfNeg)
+        x >= 0 ? x + vf * tanhf(g * x / vf) : x + vfNeg * tanhf(g * x / vfNeg)
     }
     @inline(__always) private func asymF1(_ x: Float) -> Float {
-        x >= 0 ? (vf * vf / g) * ADAA1.lnCosh(g * x / vf) : (vfNeg * vfNeg / g) * ADAA1.lnCosh(g * x / vfNeg)
+        x >= 0 ? 0.5 * x * x + (vf * vf / g) * ADAA1.lnCosh(g * x / vf)
+               : 0.5 * x * x + (vfNeg * vfNeg / g) * ADAA1.lnCosh(g * x / vfNeg)
     }
     private func asymStep(_ x: Float) -> Float {
         let p = adaaA.prevX, dx = x - p
@@ -323,13 +364,18 @@ final class CircuitDriveBlock: AudioBlock {
             if stages == 2 { applyClip(s, n) { self.softStepB(self.softStepA($0)) } }
             else           { applyClip(s, n) { self.softStepA($0) } }
 
+        case .softBounded:
+            if stages == 2 { applyClip(s, n) { self.bndStepB(self.bndStepA($0)) } }
+            else           { applyClip(s, n) { self.bndStepA($0) } }
+
         case .hardShunt:
             applyClip(s, n) { self.hardStep($0) }
 
         case .asym:
-            // Parallel CLEAN + clipped (Klon). Capture clean, clip in place (OS adds `osLatency`
-            // samples of delay to the wet), then DELAY-MATCH the clean copy through the ring and sum.
-            if let cl = clean?.baseAddress, let rb = ring?.baseAddress {
+            // Soft-feedback asym already carries the clean ramp (cleanMix = 0), so this is a pure wet
+            // pass. The delay-matched clean ring is retained for the topology but contributes nothing
+            // while cleanMix == 0 (kept so a future parallel-clean voicing can re-enable it cheaply).
+            if cleanMix > 0, let cl = clean?.baseAddress, let rb = ring?.baseAddress {
                 for i in 0..<n { cl[i] = s[i] }
                 applyClip(s, n) { self.asymStep($0) }
                 let cap = ringCap, L = min(osLatency, ringCap - 1), cmix = cleanMix, wmix = wetMix
@@ -358,10 +404,12 @@ final class CircuitDriveBlock: AudioBlock {
             dcX1 = x1; dcY1 = y1
         }
 
-        // 4) Tone stack (3 biquads, identity where unused) + 5) output level, with a finite guard.
+        // 4) Tone stack (3 biquads, identity where unused) → 5) global anti-fizz smoothing LPF →
+        //    6) output level, with a finite guard.
         let lg = outGain
         for i in 0..<n {
             var v = bq0.process(s[i]); v = bq1.process(v); v = bq2.process(v)
+            v = smoothLP.process(v)
             v *= lg
             s[i] = v.isFinite ? v : 0
         }

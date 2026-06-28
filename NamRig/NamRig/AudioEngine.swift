@@ -245,7 +245,14 @@ final class AudioEngine {
     var availableToAdd: [BlockKind] { BlockKind.allCases.filter { !blockOrder.contains($0) } }
     func addBlock(_ kind: BlockKind) {
         guard !blockOrder.contains(kind) else { return }
-        blockOrder.append(kind); setBlockEnabled(kind, true); applyOrder()
+        // Drive-family / pre-amp blocks belong in FRONT of the amp; everything else appends to the tail.
+        let preAmp: Set<BlockKind> = [.gate, .comp, .boost, .drive, .stomp, .pedal]
+        if preAmp.contains(kind), let ampIdx = blockOrder.firstIndex(of: .amp) {
+            blockOrder.insert(kind, at: ampIdx)
+        } else {
+            blockOrder.append(kind)
+        }
+        setBlockEnabled(kind, true); applyOrder()
     }
     func removeBlock(_ kind: BlockKind) { blockOrder.removeAll { $0 == kind }; applyOrder() }
     func setBlockEnabled(_ kind: BlockKind, _ on: Bool) {
