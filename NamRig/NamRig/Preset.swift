@@ -23,6 +23,7 @@ struct Preset: Codable, Identifiable {
     // FX expansion + free-order chain
     var boostOn = false, boostDb = 6.0
     var driveMode = 0
+    var stompOn = false, stompModel = 0, stompDrive = 0.5, stompTone = 0.5, stompLevel = 0.8
     var chorusOn = false, chorusRate = 0.8, chorusDepth = 6.0, chorusMix = 40.0
     var flangerOn = false, flangerRate = 0.4, flangerDepth = 2.0, flangerFb = 50.0, flangerMix = 50.0
     var tremoloOn = false, tremoloRate = 5.0, tremoloDepth = 50.0
@@ -54,6 +55,7 @@ extension Preset {
         output = g(.output, output)
         boostOn = g(.boostOn, boostOn); boostDb = g(.boostDb, boostDb)
         driveMode = g(.driveMode, driveMode)
+        stompOn = g(.stompOn, stompOn); stompModel = g(.stompModel, stompModel); stompDrive = g(.stompDrive, stompDrive); stompTone = g(.stompTone, stompTone); stompLevel = g(.stompLevel, stompLevel)
         chorusOn = g(.chorusOn, chorusOn); chorusRate = g(.chorusRate, chorusRate); chorusDepth = g(.chorusDepth, chorusDepth); chorusMix = g(.chorusMix, chorusMix)
         flangerOn = g(.flangerOn, flangerOn); flangerRate = g(.flangerRate, flangerRate); flangerDepth = g(.flangerDepth, flangerDepth); flangerFb = g(.flangerFb, flangerFb); flangerMix = g(.flangerMix, flangerMix)
         tremoloOn = g(.tremoloOn, tremoloOn); tremoloRate = g(.tremoloRate, tremoloRate); tremoloDepth = g(.tremoloDepth, tremoloDepth)

@@ -21,6 +21,7 @@ enum BlockKind: String, Sendable, CaseIterable {
     case comp = "Compressor"
     case boost = "Boost"
     case drive = "Drive"
+    case stomp = "Stomp"
     case pedal = "Pedal"
     case amp = "Amp"
     case eq = "EQ"
@@ -511,81 +512,56 @@ final class DelayBlock: AudioBlock {
 }
 
 /// Freeverb-style reverb — 8 parallel comb filters → 4 series allpass. Mono.
+/// Reverb — delegates to one of four genuinely-different algorithms (see ReverbAlgorithms.swift),
+/// selected by `algo`: 0 room → FDN .room · 1 plate → Dattorro · 2 spring → SpringReverb · 3 hall → FDN .hall.
+/// Each engine works in place and applies its own wet/dry `mix`. Switching `algo` is glitch-light
+/// (not crossfaded) — change type while the tail is quiet.
 final class ReverbBlock: AudioBlock {
-    private let combTune = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617]
-    private let apTune = [556, 441, 341, 225]
-    private var comb: [UnsafeMutableBufferPointer<Float>] = []
-    private var combIdx: [Int] = []
-    private var combStore: [Float] = []
-    private var ap: [UnsafeMutableBufferPointer<Float>] = []
-    private var apIdx: [Int] = []
-
-    var feedback: Float = 0.84   // room size
-    var damp1: Float = 0.2       // damping (0…0.4)
-    var mix: Float = 0.25
+    private let plate = DattorroPlate()
+    private let spring = SpringReverb()
+    private let fdn = FDNReverb()
+    private let algo = Atomic<Int>(3)   // 0 room · 1 plate · 2 spring · 3 hall
 
     init() { super.init(kind: .reverb) }
 
     override func prepare(sampleRate: Double, maxBlock: Int) {
-        freeBuffers()
-        let scale = Float(sampleRate) / 44100
-        for t in combTune {
-            let len = max(1, Int(Float(t) * scale))
-            let b = UnsafeMutableBufferPointer<Float>.allocate(capacity: len); b.initialize(repeating: 0)
-            comb.append(b); combIdx.append(0); combStore.append(0)
-        }
-        for t in apTune {
-            let len = max(1, Int(Float(t) * scale))
-            let b = UnsafeMutableBufferPointer<Float>.allocate(capacity: len); b.initialize(repeating: 0)
-            ap.append(b); apIdx.append(0)
-        }
+        plate.prepare(sampleRate: sampleRate, maxBlock: maxBlock)
+        spring.prepare(sampleRate: sampleRate, maxBlock: maxBlock)
+        fdn.prepare(sampleRate: sampleRate, maxBlock: maxBlock)
     }
 
-    override func reset() {
-        for b in comb { if let p = b.baseAddress { for i in 0..<b.count { p[i] = 0 } } }
-        for b in ap { if let p = b.baseAddress { for i in 0..<b.count { p[i] = 0 } } }
-        for i in combIdx.indices { combIdx[i] = 0; combStore[i] = 0 }
-        for i in apIdx.indices { apIdx[i] = 0 }
-    }
-
-    private func freeBuffers() {
-        for b in comb { b.deallocate() }
-        for b in ap { b.deallocate() }
-        comb = []; combIdx = []; combStore = []; ap = []; apIdx = []
-    }
+    override func reset() { plate.reset(); spring.reset(); fdn.reset() }
 
     override func process(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
-        guard !comb.isEmpty else { return }
-        let fb = feedback, d1 = damp1, d2 = 1 - damp1, mx = mix
-        let nComb = comb.count, nAp = ap.count
-        for i in 0..<n {
-            let input = s[i] * 0.015          // Freeverb fixed input gain
-            var out: Float = 0
-            for c in 0..<nComb {
-                let p = comb[c].baseAddress!, len = comb[c].count
-                var idx = combIdx[c]
-                let y = p[idx]
-                combStore[c] = y * d2 + combStore[c] * d1
-                p[idx] = input + combStore[c] * fb
-                idx += 1; if idx >= len { idx = 0 }
-                combIdx[c] = idx
-                out += y
-            }
-            for a in 0..<nAp {
-                let p = ap[a].baseAddress!, len = ap[a].count
-                var idx = apIdx[a]
-                let bufout = p[idx]
-                let y = -out + bufout
-                p[idx] = out + bufout * 0.5
-                idx += 1; if idx >= len { idx = 0 }
-                apIdx[a] = idx
-                out = y
-            }
-            s[i] = s[i] * (1 - mx) + out * mx
+        switch algo.load(ordering: .relaxed) {
+        case 1: plate.process(s, n)
+        case 2: spring.process(s, n)
+        default: fdn.process(s, n)          // room/hall via fdn.mode, set in configure(_:)
         }
     }
 
-    deinit { freeBuffers() }
+    /// Map the user knobs (0…100) onto the selected algorithm's natural params. Main-thread only.
+    func configure(type: Int, decayPct: Double, dampPct: Double, mixPct: Double) {
+        let dec = Float(decayPct / 100), dmp = Float(dampPct / 100), mx = Float(mixPct / 100)
+        plate.mix = mx; spring.mix = mx; fdn.mix = mx
+        switch type {
+        case 1:                              // plate
+            plate.decay = 0.4 + dec * 0.55
+            plate.damp  = dmp * 0.5
+        case 2:                              // spring
+            spring.decay = 0.5 + dec * 0.38
+            spring.tone  = 1 - dmp
+        case 3:                              // hall
+            fdn.mode = .hall
+            fdn.decay = 1.5 + dec * 4.5
+            fdn.hfDamp = dmp
+        default:                             // room
+            fdn.mode = .room
+            fdn.decay = 0.3 + dec * 1.2
+            fdn.hfDamp = dmp
+        }
+        algo.store(type, ordering: .relaxed)
+    }
 }
 
 /// Convolution reverb — single-FFT overlap-save (real vDSP FFT). Loads an IR (room/hall/plate),

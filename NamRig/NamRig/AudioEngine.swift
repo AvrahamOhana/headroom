@@ -173,9 +173,9 @@ final class AudioEngine {
     var delayMixPct: Double = 30 { didSet { delay.mix = Float(delayMixPct / 100) } }
 
     var reverbEnabled = false { didSet { reverb.bypass.store(!reverbEnabled, ordering: .relaxed) } }
-    var reverbDecayPct: Double = 70 { didSet { reverb.feedback = 0.7 + Float(reverbDecayPct / 100) * 0.28 } }
-    var reverbDampPct: Double = 30 { didSet { reverb.damp1 = Float(reverbDampPct / 100) * 0.4 } }
-    var reverbMixPct: Double = 25 { didSet { reverb.mix = Float(reverbMixPct / 100) } }
+    var reverbDecayPct: Double = 70 { didSet { updateReverb() } }
+    var reverbDampPct: Double = 30 { didSet { updateReverb() } }
+    var reverbMixPct: Double = 25 { didSet { updateReverb() } }
 
     var irReverbEnabled = false { didSet { irReverb.bypass.store(!irReverbEnabled, ordering: .relaxed) } }
     var irReverbMixPct: Double = 35 { didSet { irReverb.mix = Float(irReverbMixPct / 100) } }
@@ -195,6 +195,14 @@ final class AudioEngine {
 
     var driveMode: Int = 0 { didSet { drive.mode = driveMode } }
 
+    var stompEnabled = false { didSet { circuitDrive.bypass.store(!stompEnabled, ordering: .relaxed) } }
+    var stompModel: Int = 0 { didSet { circuitDrive.model = stompModel } }
+    var stompDrive: Double = 0.5 { didSet { circuitDrive.drive = Float(stompDrive) } }
+    var stompTone: Double = 0.5 { didSet { circuitDrive.tone = Float(stompTone) } }
+    var stompLevel: Double = 0.8 { didSet { circuitDrive.level = Float(stompLevel) } }
+    var stompModelCount: Int { circuitDrive.modelCount }
+    func stompModelName(_ i: Int) -> String { circuitDrive.modelName(i) }
+
     var boostEnabled = false { didSet { boost.bypass.store(!boostEnabled, ordering: .relaxed) } }
     var boostDb: Double = 6 { didSet { boost.gain = powf(10, Float(boostDb) / 20) } }
 
@@ -213,15 +221,19 @@ final class AudioEngine {
     var tremoloRateHz: Double = 5 { didSet { tremolo.rateHz = Float(tremoloRateHz) } }
     var tremoloDepthPct: Double = 50 { didSet { tremolo.depth = Float(tremoloDepthPct / 100) } }
 
-    var reverbType: Int = 3   // 0 room · 1 plate · 2 spring · 3 hall (voicing label)
+    var reverbType: Int = 3 { didSet { updateReverb() } }   // 0 room · 1 plate · 2 spring · 3 hall (real algorithm)
     func selectReverbType(_ t: Int) {
         reverbType = t
         switch t {
-        case 0: reverbDecayPct = 35; reverbDampPct = 60    // room
-        case 1: reverbDecayPct = 88; reverbDampPct = 12    // plate
+        case 0: reverbDecayPct = 35; reverbDampPct = 60    // room  → FDN .room
+        case 1: reverbDecayPct = 88; reverbDampPct = 12    // plate → Dattorro
         case 2: reverbDecayPct = 55; reverbDampPct = 35    // spring
-        default: reverbDecayPct = 80; reverbDampPct = 18   // hall
+        default: reverbDecayPct = 80; reverbDampPct = 18   // hall  → FDN .hall
         }
+    }
+    /// Map the reverb knobs onto whichever real algorithm `reverbType` selects (plate/spring/FDN room+hall).
+    private func updateReverb() {
+        reverb.configure(type: reverbType, decayPct: reverbDecayPct, dampPct: reverbDampPct, mixPct: reverbMixPct)
     }
 
     // Free-order chain — `blockOrder` is a permutation of all block kinds.
@@ -239,7 +251,7 @@ final class AudioEngine {
     func setBlockEnabled(_ kind: BlockKind, _ on: Bool) {
         switch kind {
         case .gate: gateEnabled = on; case .comp: compEnabled = on; case .boost: boostEnabled = on
-        case .drive: driveEnabled = on; case .pedal: pedalEnabled = on; case .amp: ampEnabled = on
+        case .drive: driveEnabled = on; case .stomp: stompEnabled = on; case .pedal: pedalEnabled = on; case .amp: ampEnabled = on
         case .eq: eqEnabled = on; case .chorus: chorusEnabled = on; case .flanger: flangerEnabled = on
         case .tremolo: tremoloEnabled = on; case .delay: delayEnabled = on; case .reverb: reverbEnabled = on
         case .irReverb: irReverbEnabled = on
@@ -248,7 +260,7 @@ final class AudioEngine {
     func isBlockEnabled(_ kind: BlockKind) -> Bool {
         switch kind {
         case .gate: return gateEnabled; case .comp: return compEnabled; case .boost: return boostEnabled
-        case .drive: return driveEnabled; case .pedal: return pedalEnabled; case .amp: return ampEnabled
+        case .drive: return driveEnabled; case .stomp: return stompEnabled; case .pedal: return pedalEnabled; case .amp: return ampEnabled
         case .eq: return eqEnabled; case .chorus: return chorusEnabled; case .flanger: return flangerEnabled
         case .tremolo: return tremoloEnabled; case .delay: return delayEnabled; case .reverb: return reverbEnabled
         case .irReverb: return irReverbEnabled
@@ -270,6 +282,7 @@ final class AudioEngine {
     private let gate = GateBlock()
     private let comp = CompressorBlock()
     private let drive = DriveBlock()
+    private let circuitDrive = CircuitDriveBlock(kind: .stomp)
     private let amp = AmpBlock()
     private let eq = EQBlock()
     private let delay = DelayBlock()
@@ -292,7 +305,7 @@ final class AudioEngine {
     init() {
         refreshModels()
         if !models.contains(where: { $0.id == selectedModelID }) { selectedModelID = models.first?.id ?? selectedModelID }
-        let chainBlocks: [AudioBlock] = [gate, comp, boost, drive, pedal, amp, eq, chorus, flanger, tremolo, delay, reverb, irReverb]
+        let chainBlocks: [AudioBlock] = [gate, comp, boost, drive, circuitDrive, pedal, amp, eq, chorus, flanger, tremolo, delay, reverb, irReverb]
         context.chain.install(chainBlocks)
         for (i, b) in chainBlocks.enumerated() { indexByKind[b.kind] = i }
         applyOrder()
@@ -305,9 +318,7 @@ final class AudioEngine {
         delay.feedback = Float(delayFeedbackPct / 100)
         delay.mix = Float(delayMixPct / 100)
         reverb.bypass.store(!reverbEnabled, ordering: .relaxed)
-        reverb.feedback = 0.7 + Float(reverbDecayPct / 100) * 0.28
-        reverb.damp1 = Float(reverbDampPct / 100) * 0.4
-        reverb.mix = Float(reverbMixPct / 100)
+        updateReverb()
         comp.bypass.store(!compEnabled, ordering: .relaxed)
         comp.thresholdDb = Float(compThresholdDb)
         comp.ratio = Float(compRatio)
@@ -318,6 +329,8 @@ final class AudioEngine {
         drive.setTone(hz: Float(driveToneHz))
         drive.level = powf(10, Float(driveLevelDb) / 20)
         drive.mode = driveMode
+        circuitDrive.bypass.store(!stompEnabled, ordering: .relaxed)
+        circuitDrive.model = stompModel; circuitDrive.drive = Float(stompDrive); circuitDrive.tone = Float(stompTone); circuitDrive.level = Float(stompLevel)
         boost.bypass.store(!boostEnabled, ordering: .relaxed); boost.gain = powf(10, Float(boostDb) / 20)
         chorus.bypass.store(!chorusEnabled, ordering: .relaxed); chorus.rateHz = Float(chorusRateHz); chorus.depthMs = Float(chorusDepthMs); chorus.mix = Float(chorusMixPct / 100)
         flanger.bypass.store(!flangerEnabled, ordering: .relaxed); flanger.rateHz = Float(flangerRateHz); flanger.depthMs = Float(flangerDepthMs); flanger.feedback = Float(flangerFeedbackPct / 100); flanger.mix = Float(flangerMixPct / 100)
@@ -528,6 +541,7 @@ final class AudioEngine {
                output: outputLevelDb,
                boostOn: boostEnabled, boostDb: boostDb,
                driveMode: driveMode,
+               stompOn: stompEnabled, stompModel: stompModel, stompDrive: stompDrive, stompTone: stompTone, stompLevel: stompLevel,
                chorusOn: chorusEnabled, chorusRate: chorusRateHz, chorusDepth: chorusDepthMs, chorusMix: chorusMixPct,
                flangerOn: flangerEnabled, flangerRate: flangerRateHz, flangerDepth: flangerDepthMs, flangerFb: flangerFeedbackPct, flangerMix: flangerMixPct,
                tremoloOn: tremoloEnabled, tremoloRate: tremoloRateHz, tremoloDepth: tremoloDepthPct,
@@ -551,6 +565,7 @@ final class AudioEngine {
         outputLevelDb = p.output
         boostEnabled = p.boostOn; boostDb = p.boostDb
         driveMode = p.driveMode
+        stompEnabled = p.stompOn; stompModel = p.stompModel; stompDrive = p.stompDrive; stompTone = p.stompTone; stompLevel = p.stompLevel
         chorusEnabled = p.chorusOn; chorusRateHz = p.chorusRate; chorusDepthMs = p.chorusDepth; chorusMixPct = p.chorusMix
         flangerEnabled = p.flangerOn; flangerRateHz = p.flangerRate; flangerDepthMs = p.flangerDepth; flangerFeedbackPct = p.flangerFb; flangerMixPct = p.flangerMix
         tremoloEnabled = p.tremoloOn; tremoloRateHz = p.tremoloRate; tremoloDepthPct = p.tremoloDepth

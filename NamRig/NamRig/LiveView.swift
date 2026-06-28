@@ -46,14 +46,17 @@ struct LiveView: View {
     // MARK: center — huge preset name
     private var presetName: some View {
         VStack(spacing: 14) {
-            Text(audio.presetTag)
-                .font(.system(size: 44, weight: .black, design: .rounded)).monospacedDigit().foregroundStyle(.white)
-                .padding(.horizontal, 22).padding(.vertical, 6)
-                .background(sceneColor(audio.sceneInBank), in: RoundedRectangle(cornerRadius: 16))
-            Text(audio.currentPresetName)
-                .font(.system(size: 130, weight: .black, design: .rounded))
-                .foregroundStyle(.white)
-                .minimumScaleFactor(0.25).lineLimit(2).multilineTextAlignment(.center)
+            HStack(alignment: .center, spacing: 14) {
+                Text(audio.presetTag)
+                    .font(.system(size: 40, weight: .black, design: .rounded)).monospacedDigit().foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 5)
+                    .background(sceneColor(audio.sceneInBank), in: RoundedRectangle(cornerRadius: 12))
+                    .fixedSize()
+                Text(audio.currentPresetName)
+                    .font(.system(size: 104, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .minimumScaleFactor(0.3).lineLimit(1)
+            }
             Text(subtitle).font(.system(.title3, design: .monospaced)).foregroundStyle(.gray)
         }
         .padding(.horizontal, 14)
@@ -63,11 +66,10 @@ struct LiveView: View {
         Button(action: onTuner) {
             HStack(spacing: 8) {
                 Image(systemName: "tuningfork")
-                Text(audio.tunerActive ? "\(audio.tunerNote) \(audio.tunerCents > 0 ? "+" : "")\(audio.tunerCents)¢" : "Tuner")
-                    .font(.system(.body, design: .rounded).weight(.semibold)).monospacedDigit()
+                Text("Tuner").font(.system(.body, design: .rounded).weight(.semibold))
             }
-            .foregroundStyle(audio.tunerActive && abs(audio.tunerCents) <= 4 ? .green : .white.opacity(0.8))
-            .padding(.vertical, 7).padding(.horizontal, 18)
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.vertical, 7).padding(.horizontal, 22)
             .background(.white.opacity(0.08), in: Capsule())
         }
         .buttonStyle(.plain).padding(.bottom, 12)

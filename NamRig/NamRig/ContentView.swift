@@ -9,12 +9,12 @@ import UIKit
 import UniformTypeIdentifiers
 
 enum ChainBlock: String, CaseIterable, Identifiable {
-    case gate, comp, boost, drive, pedal, amp, eq, chorus, flanger, tremolo, delay, reverb, irReverb
+    case gate, comp, boost, drive, stomp, pedal, amp, eq, chorus, flanger, tremolo, delay, reverb, irReverb
     var id: String { rawValue }
 
     var kind: BlockKind {
         switch self {
-        case .gate: return .gate; case .comp: return .comp; case .boost: return .boost; case .drive: return .drive
+        case .gate: return .gate; case .comp: return .comp; case .boost: return .boost; case .drive: return .drive; case .stomp: return .stomp
         case .pedal: return .pedal; case .amp: return .amp; case .eq: return .eq
         case .chorus: return .chorus; case .flanger: return .flanger; case .tremolo: return .tremolo
         case .delay: return .delay; case .reverb: return .reverb; case .irReverb: return .irReverb
@@ -22,7 +22,7 @@ enum ChainBlock: String, CaseIterable, Identifiable {
     }
     init?(_ k: BlockKind) {
         switch k {
-        case .gate: self = .gate; case .comp: self = .comp; case .boost: self = .boost; case .drive: self = .drive
+        case .gate: self = .gate; case .comp: self = .comp; case .boost: self = .boost; case .drive: self = .drive; case .stomp: self = .stomp
         case .pedal: self = .pedal; case .amp: self = .amp; case .eq: self = .eq
         case .chorus: self = .chorus; case .flanger: self = .flanger; case .tremolo: self = .tremolo
         case .delay: self = .delay; case .reverb: self = .reverb; case .irReverb: self = .irReverb
@@ -31,28 +31,28 @@ enum ChainBlock: String, CaseIterable, Identifiable {
 
     var short: String {
         switch self {
-        case .gate: return "GATE"; case .comp: return "COMP"; case .boost: return "BST"; case .drive: return "DRV"
+        case .gate: return "GATE"; case .comp: return "COMP"; case .boost: return "BST"; case .drive: return "DRV"; case .stomp: return "STMP"
         case .pedal: return "PED"; case .amp: return "AMP"; case .eq: return "EQ"; case .chorus: return "CHO"; case .flanger: return "FLG"
         case .tremolo: return "TRM"; case .delay: return "DLY"; case .reverb: return "RVB"; case .irReverb: return "IRV"
         }
     }
     var full: String {
         switch self {
-        case .gate: return "Noise Gate"; case .comp: return "Compressor"; case .boost: return "Clean Boost"; case .drive: return "Drive"
+        case .gate: return "Noise Gate"; case .comp: return "Compressor"; case .boost: return "Clean Boost"; case .drive: return "Drive"; case .stomp: return "Stompbox"
         case .pedal: return "Pedal"; case .amp: return "Amp"; case .eq: return "EQ"; case .chorus: return "Chorus"; case .flanger: return "Flanger"
         case .tremolo: return "Tremolo"; case .delay: return "Delay"; case .reverb: return "Reverb"; case .irReverb: return "IR Reverb"
         }
     }
     var icon: String {
         switch self {
-        case .gate: return "waveform.path.ecg"; case .comp: return "dial.medium"; case .boost: return "bolt.fill"; case .drive: return "flame.fill"
+        case .gate: return "waveform.path.ecg"; case .comp: return "dial.medium"; case .boost: return "bolt.fill"; case .drive: return "flame.fill"; case .stomp: return "flame.circle.fill"
         case .pedal: return "dial.low.fill"; case .amp: return "amplifier"; case .eq: return "slider.vertical.3"; case .chorus: return "water.waves"; case .flanger: return "wind"
         case .tremolo: return "metronome"; case .delay: return "timer"; case .reverb: return "drop.fill"; case .irReverb: return "square.stack.3d.down.right.fill"
         }
     }
     var color: Color {
         switch self {
-        case .gate: return .teal; case .comp: return .blue; case .boost: return .yellow; case .drive: return .orange
+        case .gate: return .teal; case .comp: return .blue; case .boost: return .yellow; case .drive: return .orange; case .stomp: return Color(red: 0.85, green: 0.3, blue: 0.1)
         case .pedal: return .brown; case .amp: return .red; case .eq: return .green; case .chorus: return .mint; case .flanger: return .indigo
         case .tremolo: return .pink; case .delay: return .purple; case .reverb: return .cyan; case .irReverb: return .cyan
         }
@@ -290,6 +290,15 @@ struct ContentView: View {
             sliderRow("Drive", value: $audio.driveAmount, range: 1...50, unit: "x")
             sliderRow("Tone", value: $audio.driveToneHz, range: 1000...8000, unit: "Hz")
             sliderRow("Level", value: $audio.driveLevelDb, range: -24...6)
+        case .stomp:
+            Picker("Pedal", selection: $audio.stompModel) {
+                ForEach(0..<audio.stompModelCount, id: \.self) { i in Text(audio.stompModelName(i)).tag(i) }
+            }
+            .pickerStyle(.menu)
+            sliderRow("Drive", value: $audio.stompDrive, range: 0...1)
+            sliderRow("Tone", value: $audio.stompTone, range: 0...1)
+            sliderRow("Level", value: $audio.stompLevel, range: 0...1)
+            Text(CircuitDriveBlock.disclaimer).font(.caption2).foregroundStyle(.secondary).padding(.top, 2)
         case .amp:
             if let art = audio.selectedArtworkPath, let ui = UIImage(contentsOfFile: art) {
                 RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.25))
@@ -413,7 +422,7 @@ struct ContentView: View {
     private func isOn(_ b: ChainBlock) -> Bool {
         switch b {
         case .gate: return audio.gateEnabled; case .comp: return audio.compEnabled; case .boost: return audio.boostEnabled
-        case .drive: return audio.driveEnabled; case .pedal: return audio.pedalEnabled; case .amp: return audio.ampEnabled; case .eq: return audio.eqEnabled
+        case .drive: return audio.driveEnabled; case .stomp: return audio.stompEnabled; case .pedal: return audio.pedalEnabled; case .amp: return audio.ampEnabled; case .eq: return audio.eqEnabled
         case .chorus: return audio.chorusEnabled; case .flanger: return audio.flangerEnabled; case .tremolo: return audio.tremoloEnabled
         case .delay: return audio.delayEnabled; case .reverb: return audio.reverbEnabled; case .irReverb: return audio.irReverbEnabled
         }
@@ -421,7 +430,7 @@ struct ContentView: View {
     private func enabled(_ b: ChainBlock) -> Binding<Bool> {
         switch b {
         case .gate: return $audio.gateEnabled; case .comp: return $audio.compEnabled; case .boost: return $audio.boostEnabled
-        case .drive: return $audio.driveEnabled; case .pedal: return $audio.pedalEnabled; case .amp: return $audio.ampEnabled; case .eq: return $audio.eqEnabled
+        case .drive: return $audio.driveEnabled; case .stomp: return $audio.stompEnabled; case .pedal: return $audio.pedalEnabled; case .amp: return $audio.ampEnabled; case .eq: return $audio.eqEnabled
         case .chorus: return $audio.chorusEnabled; case .flanger: return $audio.flangerEnabled; case .tremolo: return $audio.tremoloEnabled
         case .delay: return $audio.delayEnabled; case .reverb: return $audio.reverbEnabled; case .irReverb: return $audio.irReverbEnabled
         }
