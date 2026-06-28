@@ -62,11 +62,13 @@ enum ChainBlock: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @State private var audio = AudioEngine()
     @State private var selected: ChainBlock? = nil   // nil → no editor shown (clean screen)
+    @State private var outputSelected = false        // the OUTPUT block's editor (master + stereo)
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSave = false
     @State private var newName = ""
     @State private var showTuner = false
     @State private var showSettings = false
+    @AppStorage("uiAppearance") private var uiAppearance = 0   // 0 system · 1 light · 2 dark
     @State private var showImporter = false
     @State private var showIRImporter = false
     @State private var showRevIRImporter = false
@@ -75,6 +77,10 @@ struct ContentView: View {
     @State private var showReorder = false
     @State private var showLive = false
     @State private var showMIDI = false
+    @State private var showPresets = false
+    @State private var renameIdx: Int? = nil
+    @State private var renameText = ""
+    @State private var mutedBeforeTuner = false
     @State private var midi = MIDIManager()
     private var isRunning: Bool { audio.state == .running }
 
@@ -86,7 +92,7 @@ struct ContentView: View {
                 presetBar
                 chainStrip
                 if let sel = selected { editorPanel(sel) }
-                outputCard
+                else if outputSelected { outputEditorPanel }
                 if let err = audio.lastError {
                     Text(err).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center)
                 }
@@ -104,11 +110,18 @@ struct ContentView: View {
             Button("Save") { audio.saveCurrent(as: newName); newName = "" }
             Button("Cancel", role: .cancel) { newName = "" }
         }
-        .sheet(isPresented: $showTuner) { tunerSheet }
+        .sheet(isPresented: $showTuner) {
+            tunerSheet
+                .onAppear { mutedBeforeTuner = audio.muted; audio.muted = true }
+                .onDisappear { audio.muted = mutedBeforeTuner }
+        }
         .sheet(isPresented: $showSettings) { settingsSheet }
         .sheet(isPresented: $showReorder) { reorderSheet }
         .sheet(isPresented: $showMIDI) { midiSheet }
-        .fullScreenCover(isPresented: $showLive) { LiveView(audio: audio, onExit: { showLive = false }, onTuner: { showLive = false; showTuner = true }) }
+        .fullScreenCover(isPresented: $showLive) {
+            LiveView(audio: audio, onExit: { showLive = false }, onTuner: { showLive = false; showTuner = true })
+                .preferredColorScheme(uiAppearance == 1 ? .light : uiAppearance == 2 ? .dark : nil)
+        }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [UTType(filenameExtension: "nam") ?? .data]) { result in
             if case .success(let url) = result { audio.importModel(from: url) }
         }
@@ -120,6 +133,7 @@ struct ContentView: View {
         }
         .sheet(item: $t3kBrowse) { target in T3KBrowser(audio: audio, target: target) }
         .sheet(isPresented: $showManage) { manageSheet }
+        .sheet(isPresented: $showPresets) { presetManageSheet }
     }
 
     // MARK: - Header
@@ -172,6 +186,8 @@ struct ContentView: View {
             Spacer()
             Button { audio.nextPreset() } label: { Image(systemName: "chevron.right.circle.fill").font(.title) }.buttonStyle(.plain)
             Menu {
+                Button { showPresets = true } label: { Label("Setlist / Manage…", systemImage: "music.note.list") }
+                Divider()
                 Button { showSave = true } label: { Label("Save as new…", systemImage: "plus") }
                 Button { audio.overwriteCurrent() } label: { Label("Overwrite current", systemImage: "square.and.arrow.down") }
                 Divider()
@@ -205,7 +221,7 @@ struct ContentView: View {
                     connector
                     addTile
                     connector
-                    endLabel("OUT")
+                    outputTile
                 }
                 .padding(.vertical, 2)
             }
@@ -214,7 +230,7 @@ struct ContentView: View {
 
     private func tile(_ block: ChainBlock) -> some View {
         let on = isOn(block), sel = selected == block
-        return Button { selected = (selected == block ? nil : block) } label: {
+        return Button { selected = (selected == block ? nil : block); outputSelected = false } label: {
             VStack(spacing: 6) {
                 Image(systemName: block.icon).font(.system(size: 20, weight: .semibold))
                 Text(block.short).font(.system(size: 10, weight: .heavy))
@@ -463,15 +479,44 @@ struct ContentView: View {
         }
     }
 
-    private var outputCard: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "slider.horizontal.3").foregroundStyle(.secondary)
-                Text("OUTPUT / MIXER").font(.caption.bold()).foregroundStyle(.secondary)
+    private var outputTile: some View {
+        Button { outputSelected.toggle(); selected = nil } label: {
+            VStack(spacing: 6) {
+                Image(systemName: "slider.horizontal.3").font(.system(size: 20, weight: .semibold))
+                Text("OUT").font(.system(size: 10, weight: .heavy))
+            }
+            .frame(width: 58, height: 74)
+            .foregroundStyle(.white)
+            .background(LinearGradient(colors: [.cyan, .blue], startPoint: .top, endPoint: .bottom),
+                        in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(outputSelected ? .white : .clear, lineWidth: 2))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var outputEditorPanel: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Image(systemName: "slider.horizontal.3").foregroundStyle(.cyan)
+                Text("Output / Mixer").font(.headline)
                 Spacer()
                 Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(.tertiary)
             }
             sliderRow("Master", value: $audio.outputLevelDb, range: -40...12)
+            Divider().overlay(.secondary.opacity(0.2))
+            Toggle(isOn: $audio.stereoOn) {
+                Label("Stereo Width", systemImage: "speaker.wave.3.fill").font(.subheadline.bold())
+            }
+            .tint(.cyan)
+            if audio.stereoOn {
+                sliderRow("Width", value: $audio.stereoWidth, range: 0...100, unit: "%")
+                sliderRow("Ping-Pong", value: $audio.stereoPingMix, range: 0...100, unit: "%")
+                sliderRow("Echo Time", value: $audio.stereoPingTime, range: 50...700, unit: "ms")
+                sliderRow("Feedback", value: $audio.stereoPingFb, range: 0...85, unit: "%")
+                sliderRow("Ambience", value: $audio.stereoSpace, range: 0...100, unit: "%")
+                Text("Mono chain → wide stereo out. Needs headphones or stereo monitors to hear.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
         }
         .padding().frame(maxWidth: .infinity)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
@@ -601,6 +646,13 @@ struct ContentView: View {
                     }
                     row("OS-reported I/O", fmt(audio.reportedLatencyMs))
                 }
+                Section("Appearance") {
+                    Picker("Theme", selection: $uiAppearance) {
+                        Text("System").tag(0)
+                        Text("Light").tag(1)
+                        Text("Dark").tag(2)
+                    }
+                }
                 Section("Performance") {
                     TimelineView(.periodic(from: .now, by: 0.2)) { _ in
                         let pct = audio.cpuPercent
@@ -622,6 +674,50 @@ struct ContentView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSettings = false } } }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private var presetManageSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(Array(audio.presets.enumerated()), id: \.element.id) { i, p in
+                        HStack(spacing: 10) {
+                            Text(audio.tag(for: i))
+                                .font(.system(size: 13, weight: .black, design: .rounded)).monospacedDigit().foregroundStyle(.white)
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .background(sceneColor(audio.scene(for: i)), in: RoundedRectangle(cornerRadius: 6))
+                            Text(p.name).fontWeight(i == audio.currentPresetIndex ? .bold : .regular)
+                            Spacer()
+                            if i == audio.currentPresetIndex {
+                                Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(.green)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { audio.loadPreset(at: i); showPresets = false }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) { audio.deletePreset(at: i) } label: { Label("Delete", systemImage: "trash") }
+                            Button { audio.duplicatePreset(at: i) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }.tint(.blue)
+                            Button { renameText = p.name; renameIdx = i } label: { Label("Rename", systemImage: "pencil") }.tint(.orange)
+                        }
+                    }
+                    .onMove { audio.movePreset(from: $0, to: $1) }
+                } footer: {
+                    Text("Tap to load · swipe a row for rename / duplicate / delete · tap Edit to drag-reorder. The tags (0A–0D, 1A…) and MIDI Program numbers follow this order.")
+                }
+            }
+            .navigationTitle("Setlist")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { EditButton() }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { showPresets = false } }
+            }
+            .alert("Rename preset", isPresented: Binding(get: { renameIdx != nil }, set: { if !$0 { renameIdx = nil } })) {
+                TextField("Name", text: $renameText)
+                Button("Save") { if let i = renameIdx { audio.renamePreset(at: i, to: renameText) }; renameIdx = nil }
+                Button("Cancel", role: .cancel) { renameIdx = nil }
+            }
+        }
+        .presentationDetents([.large])
     }
 
     private var manageSheet: some View {

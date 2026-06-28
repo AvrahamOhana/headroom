@@ -19,6 +19,7 @@ struct Preset: Codable, Identifiable {
     var delayOn = false, delayTime = 350.0, delayFb = 35.0, delayMix = 30.0
     var reverbOn = false, reverbDecay = 70.0, reverbDamp = 30.0, reverbMix = 25.0
     var output = -6.0
+    var stereoOn = false, stereoPingMix = 25.0, stereoPingTime = 350.0, stereoPingFb = 30.0, stereoSpace = 18.0, stereoWidth = 100.0
 
     // FX expansion + free-order chain
     var boostOn = false, boostDb = 6.0
@@ -53,6 +54,7 @@ extension Preset {
         delayOn = g(.delayOn, delayOn); delayTime = g(.delayTime, delayTime); delayFb = g(.delayFb, delayFb); delayMix = g(.delayMix, delayMix)
         reverbOn = g(.reverbOn, reverbOn); reverbDecay = g(.reverbDecay, reverbDecay); reverbDamp = g(.reverbDamp, reverbDamp); reverbMix = g(.reverbMix, reverbMix)
         output = g(.output, output)
+        stereoOn = g(.stereoOn, stereoOn); stereoPingMix = g(.stereoPingMix, stereoPingMix); stereoPingTime = g(.stereoPingTime, stereoPingTime); stereoPingFb = g(.stereoPingFb, stereoPingFb); stereoSpace = g(.stereoSpace, stereoSpace); stereoWidth = g(.stereoWidth, stereoWidth)
         boostOn = g(.boostOn, boostOn); boostDb = g(.boostDb, boostDb)
         driveMode = g(.driveMode, driveMode)
         stompOn = g(.stompOn, stompOn); stompModel = g(.stompModel, stompModel); stompDrive = g(.stompDrive, stompDrive); stompTone = g(.stompTone, stompTone); stompLevel = g(.stompLevel, stompLevel)

@@ -21,8 +21,25 @@ final class RenderContext: @unchecked Sendable {
     var cpuLoad: Float = 0   // DSP time / buffer time (smoothed)
     let analysis = UnsafeMutableBufferPointer<Float>.allocate(capacity: 4096)  // dry-input ring for the tuner
     var analysisW = 0
-    init() { analysis.initialize(repeating: 0) }
-    deinit { scratch.deallocate(); analysis.deallocate() }
+
+    // Tier-1 stereo output stage (mono chain → wide stereo). Bit-identical mono when stereoEnabled is false.
+    let ping = PingPongDelay()
+    let rev = StereoReverb()
+    var stereoEnabled = false
+    let ppL = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
+    let ppR = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
+    let rvL = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
+    let rvR = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
+
+    init() {
+        analysis.initialize(repeating: 0)
+        ppL.initialize(repeating: 0, count: 4096); ppR.initialize(repeating: 0, count: 4096)
+        rvL.initialize(repeating: 0, count: 4096); rvR.initialize(repeating: 0, count: 4096)
+    }
+    deinit {
+        scratch.deallocate(); analysis.deallocate()
+        ppL.deallocate(); ppR.deallocate(); rvL.deallocate(); rvR.deallocate()
+    }
 }
 
 @MainActor
@@ -158,8 +175,18 @@ final class AudioEngine {
         didSet { gate.threshold = powf(10, Float(gateThresholdDb) / 20) }
     }
     var outputLevelDb: Double = -6 {
-        didSet { context.outputGain = powf(10, Float(outputLevelDb) / 20) }
+        didSet { if !muted { context.outputGain = powf(10, Float(outputLevelDb) / 20) } }
     }
+    /// Instant MUTE / panic — silences output WITHOUT tearing down the engine (no restart hitch). Transient (not saved).
+    var muted = false { didSet { context.outputGain = muted ? 0 : powf(10, Float(outputLevelDb) / 20) } }
+    func toggleMute() { muted.toggle() }
+    // Tier-1 stereo output stage (per-preset). `stereoWidth` drives both the ping-pong spread and the reverb width.
+    var stereoOn = false { didSet { context.stereoEnabled = stereoOn } }
+    var stereoPingMix: Double = 25 { didSet { context.ping.mixPct = Float(stereoPingMix) } }
+    var stereoPingTime: Double = 350 { didSet { context.ping.timeMs = Float(stereoPingTime) } }
+    var stereoPingFb: Double = 30 { didSet { context.ping.feedbackPct = Float(stereoPingFb) } }
+    var stereoSpace: Double = 18 { didSet { context.rev.mixPct = Float(stereoSpace) } }
+    var stereoWidth: Double = 100 { didSet { context.ping.spreadPct = Float(stereoWidth); context.rev.widthPct = Float(stereoWidth) } }
     var eqEnabled = true {
         didSet { eq.bypass.store(!eqEnabled, ordering: .relaxed) }
     }
@@ -508,6 +535,10 @@ final class AudioEngine {
     var sceneInBank: Int { currentPresetIndex % Self.liveBankSize }
     /// Stage-friendly tag: bank number + scene letter, e.g. "0A", "1C".
     var presetTag: String { "\(bankIndex)\(["A", "B", "C", "D"][min(max(sceneInBank, 0), 3)])" }
+    // Index-parameterized tag/scene so the setlist + LiveView can label ANY preset (not just current).
+    func bank(for i: Int) -> Int { i / Self.liveBankSize }
+    func scene(for i: Int) -> Int { ((i % Self.liveBankSize) + Self.liveBankSize) % Self.liveBankSize }
+    func tag(for i: Int) -> String { "\(bank(for: i))\(["A", "B", "C", "D"][min(max(scene(for: i), 0), 3)])" }
     func handleProgramChange(_ pc: Int) { loadPreset(at: pc) }   // loadPreset already range-guards
 
     /// MIDI CC → engine param (0…1 normalized into the param's range). Reuses the existing didSet→block path.
@@ -536,6 +567,39 @@ final class AudioEngine {
         presets[currentPresetIndex] = p; PresetStore.save(presets)
     }
 
+    // MARK: Setlist editing (live-gig management) — all persist immediately.
+    func renamePreset(at i: Int, to name: String) {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        guard presets.indices.contains(i), !n.isEmpty else { return }
+        presets[i].name = n; PresetStore.save(presets)
+    }
+    func duplicatePreset(at i: Int) {
+        guard presets.indices.contains(i) else { return }
+        var copy = presets[i]; copy.id = UUID(); copy.name = presets[i].name + " copy"
+        presets.insert(copy, at: i + 1)
+        if i < currentPresetIndex { currentPresetIndex += 1 }
+        PresetStore.save(presets)
+    }
+    func deletePreset(at i: Int) {
+        guard presets.indices.contains(i), presets.count > 1 else { return }
+        presets.remove(at: i)
+        if currentPresetIndex >= presets.count { currentPresetIndex = presets.count - 1 }
+        else if i < currentPresetIndex { currentPresetIndex -= 1 }
+        PresetStore.save(presets)
+    }
+    func movePreset(from source: IndexSet, to destination: Int) {
+        let keepID = presets.indices.contains(currentPresetIndex) ? presets[currentPresetIndex].id : nil
+        // Manual move — Array.move(fromOffsets:toOffset:) is a SwiftUI extension, unavailable in the engine.
+        let sorted = source.sorted()
+        let items = sorted.map { presets[$0] }
+        for i in sorted.reversed() { presets.remove(at: i) }
+        let removedBelow = sorted.filter { $0 < destination }.count
+        let insertAt = min(max(destination - removedBelow, 0), presets.count)
+        presets.insert(contentsOf: items, at: insertAt)
+        if let id = keepID, let idx = presets.firstIndex(where: { $0.id == id }) { currentPresetIndex = idx }
+        PresetStore.save(presets)
+    }
+
     private func capture(name: String) -> Preset {
         Preset(name: name, model: selectedModelID,
                ampOn: ampEnabled, ampDrive: inputDriveDb,
@@ -546,6 +610,7 @@ final class AudioEngine {
                delayOn: delayEnabled, delayTime: delayTimeMs, delayFb: delayFeedbackPct, delayMix: delayMixPct,
                reverbOn: reverbEnabled, reverbDecay: reverbDecayPct, reverbDamp: reverbDampPct, reverbMix: reverbMixPct,
                output: outputLevelDb,
+               stereoOn: stereoOn, stereoPingMix: stereoPingMix, stereoPingTime: stereoPingTime, stereoPingFb: stereoPingFb, stereoSpace: stereoSpace, stereoWidth: stereoWidth,
                boostOn: boostEnabled, boostDb: boostDb,
                driveMode: driveMode,
                stompOn: stompEnabled, stompModel: stompModel, stompDrive: stompDrive, stompTone: stompTone, stompLevel: stompLevel,
@@ -570,6 +635,7 @@ final class AudioEngine {
         delayEnabled = p.delayOn; delayTimeMs = p.delayTime; delayFeedbackPct = p.delayFb; delayMixPct = p.delayMix
         reverbEnabled = p.reverbOn; reverbDecayPct = p.reverbDecay; reverbDampPct = p.reverbDamp; reverbMixPct = p.reverbMix
         outputLevelDb = p.output
+        stereoOn = p.stereoOn; stereoPingMix = p.stereoPingMix; stereoPingTime = p.stereoPingTime; stereoPingFb = p.stereoPingFb; stereoSpace = p.stereoSpace; stereoWidth = p.stereoWidth
         boostEnabled = p.boostOn; boostDb = p.boostDb
         driveMode = p.driveMode
         stompEnabled = p.stompOn; stompModel = p.stompModel; stompDrive = p.stompDrive; stompTone = p.stompTone; stompLevel = p.stompLevel
@@ -630,14 +696,22 @@ final class AudioEngine {
             throw NSError(domain: "AudioEngine", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "No audio input detected — plug in your iRig + guitar and try again."])
         }
-        guard let monoFormat = AVAudioFormat(standardFormatWithSampleRate: inputFormat.sampleRate, channels: 1) else {
+        guard let stereoFormat = AVAudioFormat(standardFormatWithSampleRate: inputFormat.sampleRate, channels: 2) else {
             throw NSError(domain: "AudioEngine", code: 3,
-                          userInfo: [NSLocalizedDescriptionKey: "Could not create the processing format."])
+                          userInfo: [NSLocalizedDescriptionKey: "Could not create the stereo output format."])
         }
 
         context.ring.reset()
         context.chain.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
         context.chain.reset()
+        context.ping.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
+        context.rev.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
+        context.ping.reset(); context.rev.reset()
+        context.rev.decayPct = 60; context.rev.dampPct = 35
+        context.stereoEnabled = stereoOn
+        context.ping.mixPct = Float(stereoPingMix); context.ping.timeMs = Float(stereoPingTime)
+        context.ping.feedbackPct = Float(stereoPingFb); context.ping.spreadPct = Float(stereoWidth)
+        context.rev.mixPct = Float(stereoSpace); context.rev.widthPct = Float(stereoWidth)
         context.sr = inputFormat.sampleRate
         context.cpuLoad = 0
         let context = self.context  // capture the RT box (Sendable), never `self`
@@ -649,7 +723,7 @@ final class AudioEngine {
             return noErr
         }
 
-        let source = AVAudioSourceNode(format: monoFormat) { isSilence, _, frameCount, ablPtr in
+        let source = AVAudioSourceNode(format: stereoFormat) { isSilence, _, frameCount, ablPtr in
             let n = Int(frameCount)
             if n > 4096 || !context.ring.read(into: context.scratch, count: n) {
                 isSilence.pointee = true
@@ -669,18 +743,39 @@ final class AudioEngine {
             context.analysisW = aw
             context.inPeak = inP
 
-            // The block chain: gate → amp → (future effects).
+            // The block chain (mono).
             context.chain.render(s, n)
 
             var outP: Float = 0
             for i in 0..<n { let a = abs(s[i]); if a.isFinite && a > outP { outP = a } }
             context.outPeak = outP
 
+            // Output stage: mono → (optional) wide stereo. Wet-only ping-pong + decorrelated reverb summed
+            // on top of the centered dry; bit-identical mono on both channels when stereo is OFF.
             let og = context.outputGain
-            for i in 0..<n {
-                var v = s[i] * og
-                if !v.isFinite { v = 0 } else if v > 1 { v = 1 } else if v < -1 { v = -1 }
-                s[i] = v
+            let out = UnsafeMutableAudioBufferListPointer(ablPtr)
+            if context.stereoEnabled, out.count >= 2,
+               let dL = out[0].mData?.assumingMemoryBound(to: Float.self),
+               let dR = out[1].mData?.assumingMemoryBound(to: Float.self) {
+                context.ping.processStereo(s, context.ppL, context.ppR, n)   // wet only
+                context.rev.processStereo(s, context.rvL, context.rvR, n)    // wet only
+                for i in 0..<n {
+                    var l = (s[i] + context.ppL[i] + context.rvL[i]) * og
+                    var r = (s[i] + context.ppR[i] + context.rvR[i]) * og
+                    if !l.isFinite { l = 0 } else if l > 1 { l = 1 } else if l < -1 { l = -1 }
+                    if !r.isFinite { r = 0 } else if r > 1 { r = 1 } else if r < -1 { r = -1 }
+                    dL[i] = l; dR[i] = r
+                }
+            } else {
+                for i in 0..<n {
+                    var v = s[i] * og
+                    if !v.isFinite { v = 0 } else if v > 1 { v = 1 } else if v < -1 { v = -1 }
+                    s[i] = v
+                }
+                for buffer in out {
+                    guard let dst = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
+                    memcpy(dst, s, n * MemoryLayout<Float>.size)
+                }
             }
 
             // DSP load = processing time / buffer time (smoothed).
@@ -689,19 +784,13 @@ final class AudioEngine {
                 let used = Float(Double(DispatchTime.now().uptimeNanoseconds - t0) / bufNs)
                 context.cpuLoad = context.cpuLoad * 0.9 + used * 0.1
             }
-
-            let out = UnsafeMutableAudioBufferListPointer(ablPtr)
-            for buffer in out {
-                guard let dst = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                memcpy(dst, s, n * MemoryLayout<Float>.size)
-            }
             return noErr
         }
 
         engine.attach(sink)
         engine.attach(source)
         engine.connect(input, to: sink, format: inputFormat)
-        engine.connect(source, to: engine.mainMixerNode, format: monoFormat)
+        engine.connect(source, to: engine.mainMixerNode, format: stereoFormat)
         sinkNode = sink
         sourceNode = source
 

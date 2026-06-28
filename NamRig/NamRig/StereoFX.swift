@@ -23,7 +23,7 @@ import Foundation
 /// Equal-power pan law. pan ∈ [−1, 1]; θ = (pan+1)·π/4 so center = (0.707, 0.707),
 /// hard left = (1, 0), hard right = (0, 1). Keeps perceived loudness constant across the pan sweep.
 @inline(__always)
-func equalPowerPan(_ pan: Float) -> (l: Float, r: Float) {
+nonisolated func equalPowerPan(_ pan: Float) -> (l: Float, r: Float) {
     let p = min(max(pan, -1), 1)
     let theta = (p + 1) * (Float.pi / 4)
     return (cosf(theta), sinf(theta))
@@ -35,7 +35,7 @@ func equalPowerPan(_ pan: Float) -> (l: Float, r: Float) {
 /// Cross-coupled dual delay line. An impulse appears on L after one delay, R after two, L after
 /// three… (full bounce), decaying by `feedback` each hop. `spread` morphs between a centered mono
 /// slap (0) and a full L↔R bounce (100) by blending the self-feedback and cross-feedback paths.
-final class PingPongDelay: @unchecked Sendable {
+nonisolated final class PingPongDelay: @unchecked Sendable {
     // Params — plain values, set off the audio thread (benign race, like DelayBlock).
     var timeMs: Float = 350       // echo spacing
     var feedbackPct: Float = 35   // 0…~99 — regeneration per hop
@@ -111,7 +111,7 @@ final class PingPongDelay: @unchecked Sendable {
 /// so the two channels are genuinely DEcorrelated (a wide field, not dual-mono). `width` cross-
 /// mixes the two tanks (1 = max width / fully separate, 0 = collapsed to mono). All recursive
 /// lines flush denormals so a long tail can't stall the audio thread.
-final class StereoReverb: @unchecked Sendable {
+nonisolated final class StereoReverb: @unchecked Sendable {
     // Params — plain values (benign race, like ReverbBlock).
     var decayPct: Float = 70      // room size → comb feedback
     var dampPct: Float = 30       // HF damping in the tail
