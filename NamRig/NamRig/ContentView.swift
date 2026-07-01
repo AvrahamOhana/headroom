@@ -9,13 +9,13 @@ import UIKit
 import UniformTypeIdentifiers
 
 enum ChainBlock: String, CaseIterable, Identifiable {
-    case gate, comp, boost, drive, stomp, pedal, amp, eq, chorus, flanger, tremolo, delay, reverb, irReverb
+    case gate, comp, boost, drive, stomp, pedal, amp, cab, eq, chorus, flanger, tremolo, delay, reverb, irReverb
     var id: String { rawValue }
 
     var kind: BlockKind {
         switch self {
         case .gate: return .gate; case .comp: return .comp; case .boost: return .boost; case .drive: return .drive; case .stomp: return .stomp
-        case .pedal: return .pedal; case .amp: return .amp; case .eq: return .eq
+        case .pedal: return .pedal; case .amp: return .amp; case .cab: return .cab; case .eq: return .eq
         case .chorus: return .chorus; case .flanger: return .flanger; case .tremolo: return .tremolo
         case .delay: return .delay; case .reverb: return .reverb; case .irReverb: return .irReverb
         }
@@ -23,7 +23,7 @@ enum ChainBlock: String, CaseIterable, Identifiable {
     init?(_ k: BlockKind) {
         switch k {
         case .gate: self = .gate; case .comp: self = .comp; case .boost: self = .boost; case .drive: self = .drive; case .stomp: self = .stomp
-        case .pedal: self = .pedal; case .amp: self = .amp; case .eq: self = .eq
+        case .pedal: self = .pedal; case .amp: self = .amp; case .cab: self = .cab; case .eq: self = .eq
         case .chorus: self = .chorus; case .flanger: self = .flanger; case .tremolo: self = .tremolo
         case .delay: self = .delay; case .reverb: self = .reverb; case .irReverb: self = .irReverb
         }
@@ -32,28 +32,28 @@ enum ChainBlock: String, CaseIterable, Identifiable {
     var short: String {
         switch self {
         case .gate: return "GATE"; case .comp: return "COMP"; case .boost: return "BST"; case .drive: return "DRV"; case .stomp: return "STMP"
-        case .pedal: return "PED"; case .amp: return "AMP"; case .eq: return "EQ"; case .chorus: return "CHO"; case .flanger: return "FLG"
+        case .pedal: return "PED"; case .amp: return "AMP"; case .cab: return "CAB"; case .eq: return "EQ"; case .chorus: return "CHO"; case .flanger: return "FLG"
         case .tremolo: return "TRM"; case .delay: return "DLY"; case .reverb: return "RVB"; case .irReverb: return "IRV"
         }
     }
     var full: String {
         switch self {
         case .gate: return "Noise Gate"; case .comp: return "Compressor"; case .boost: return "Clean Boost"; case .drive: return "Drive"; case .stomp: return "Stompbox"
-        case .pedal: return "Pedal"; case .amp: return "Amp"; case .eq: return "EQ"; case .chorus: return "Chorus"; case .flanger: return "Flanger"
+        case .pedal: return "Pedal"; case .amp: return "Amp"; case .cab: return "Cab"; case .eq: return "EQ"; case .chorus: return "Chorus"; case .flanger: return "Flanger"
         case .tremolo: return "Tremolo"; case .delay: return "Delay"; case .reverb: return "Reverb"; case .irReverb: return "IR Reverb"
         }
     }
     var icon: String {
         switch self {
         case .gate: return "waveform.path.ecg"; case .comp: return "dial.medium"; case .boost: return "bolt.fill"; case .drive: return "flame.fill"; case .stomp: return "flame.circle.fill"
-        case .pedal: return "dial.low.fill"; case .amp: return "amplifier"; case .eq: return "slider.vertical.3"; case .chorus: return "water.waves"; case .flanger: return "wind"
+        case .pedal: return "dial.low.fill"; case .amp: return "amplifier"; case .cab: return "hifispeaker.fill"; case .eq: return "slider.vertical.3"; case .chorus: return "water.waves"; case .flanger: return "wind"
         case .tremolo: return "metronome"; case .delay: return "timer"; case .reverb: return "drop.fill"; case .irReverb: return "square.stack.3d.down.right.fill"
         }
     }
     var color: Color {
         switch self {
         case .gate: return .teal; case .comp: return .blue; case .boost: return .yellow; case .drive: return .orange; case .stomp: return Color(red: 0.85, green: 0.3, blue: 0.1)
-        case .pedal: return .brown; case .amp: return .red; case .eq: return .green; case .chorus: return .mint; case .flanger: return .indigo
+        case .pedal: return .brown; case .amp: return .red; case .cab: return Color(red: 0.62, green: 0.42, blue: 0.24); case .eq: return .green; case .chorus: return .mint; case .flanger: return .indigo
         case .tremolo: return .pink; case .delay: return .purple; case .reverb: return .cyan; case .irReverb: return .cyan
         }
     }
@@ -142,10 +142,17 @@ struct ContentView: View {
         HStack(spacing: 12) {
             Text("NamRig").font(.title2.bold())
             Spacer()
-            Button { showTuner = true } label: { Image(systemName: "tuningfork").font(.title3) }.buttonStyle(.plain)
-            Button { showMIDI = true } label: { Image(systemName: "pianokeys").font(.title3) }.buttonStyle(.plain)
-            Button { showLive = true } label: { Image(systemName: "tv").font(.title3) }.buttonStyle(.plain)
-            Button { showSettings = true } label: { Image(systemName: "gearshape").font(.title3) }.buttonStyle(.plain)
+            Button { showLive = true } label: {
+                Label("Live", systemImage: "tv").font(.subheadline.bold())
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(.tint.opacity(0.18), in: Capsule())
+            }.buttonStyle(.plain)
+            Menu {
+                Button { showTuner = true } label: { Label("Tuner", systemImage: "tuningfork") }
+                Button { showMIDI = true } label: { Label("MIDI", systemImage: "pianokeys") }
+                Divider()
+                Button { showSettings = true } label: { Label("Settings", systemImage: "slider.horizontal.3") }
+            } label: { Image(systemName: "gearshape").font(.title3) }
             Button(action: audio.toggle) {
                 Image(systemName: isRunning ? "power.circle.fill" : "power.circle")
                     .font(.title2).foregroundStyle(isRunning ? .green : .secondary)
@@ -346,17 +353,6 @@ struct ContentView: View {
             }
             Text(audio.modelStatus).font(.caption).foregroundStyle(.secondary)
             sliderRow("Drive", value: $audio.inputDriveDb, range: 0...24)
-            HStack(spacing: 8) {
-                Image(systemName: "hifispeaker.fill").foregroundStyle(.secondary)
-                Text(audio.cabIRName).font(.subheadline).lineLimit(1)
-                Spacer()
-                if audio.cabIRName != "None" {
-                    Button { audio.clearCabIR() } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
-                }
-                Button { showIRImporter = true } label: { Label("Cab IR", systemImage: "square.and.arrow.down") }.font(.subheadline)
-            }
-            .padding(.vertical, 7).padding(.horizontal, 10)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             TimelineView(.periodic(from: .now, by: 0.08)) { _ in
                 VStack(spacing: 8) { meter("In", audio.inPeakDb); meter("Out", audio.outPeakDb) }
             }
@@ -407,8 +403,34 @@ struct ContentView: View {
         case .tremolo:
             sliderRow("Rate", value: $audio.tremoloRateHz, range: 0.5...14, unit: "Hz")
             sliderRow("Depth", value: $audio.tremoloDepthPct, range: 0...100, unit: "%")
+        case .cab:
+            HStack(spacing: 8) {
+                Image(systemName: "hifispeaker.fill").foregroundStyle(.secondary)
+                Text(audio.cabIRName).font(.subheadline).lineLimit(1)
+                Spacer()
+                if audio.cabIRName != "None" {
+                    Button { audio.clearCabIR() } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+                Button { t3kBrowse = .cab } label: { Label("Browse", systemImage: "magnifyingglass") }.font(.subheadline)
+                Button { showIRImporter = true } label: { Label("File", systemImage: "square.and.arrow.down") }.font(.subheadline)
+            }
+            Text("Speaker cabinet IR. Browse TONE3000 cabs or load your own .wav / .aiff.")
+                .font(.caption2).foregroundStyle(.secondary)
         case .delay:
-            sliderRow("Time", value: $audio.delayTimeMs, range: 50...1000, unit: "ms")
+            Toggle("Tempo Sync", isOn: $audio.delaySync).tint(.purple).font(.subheadline)
+            if audio.delaySync {
+                HStack {
+                    Button { audio.tapTempo() } label: { Label("TAP", systemImage: "hand.tap.fill") }
+                        .buttonStyle(.borderedProminent).tint(.purple)
+                    Spacer()
+                    Text("\(audio.tempo.bpmRounded) BPM").font(.headline.monospacedDigit())
+                }
+                Picker("Division", selection: $audio.delayDivision) {
+                    ForEach(TempoClock.NoteDivision.allCases) { d in Text(d.displayName).tag(d) }
+                }.pickerStyle(.segmented)
+            } else {
+                sliderRow("Time", value: $audio.delayTimeMs, range: 50...1000, unit: "ms")
+            }
             sliderRow("Feedback", value: $audio.delayFeedbackPct, range: 0...90, unit: "%")
             sliderRow("Mix", value: $audio.delayMixPct, range: 0...100, unit: "%")
         case .reverb:
@@ -438,7 +460,7 @@ struct ContentView: View {
     private func isOn(_ b: ChainBlock) -> Bool {
         switch b {
         case .gate: return audio.gateEnabled; case .comp: return audio.compEnabled; case .boost: return audio.boostEnabled
-        case .drive: return audio.driveEnabled; case .stomp: return audio.stompEnabled; case .pedal: return audio.pedalEnabled; case .amp: return audio.ampEnabled; case .eq: return audio.eqEnabled
+        case .drive: return audio.driveEnabled; case .stomp: return audio.stompEnabled; case .pedal: return audio.pedalEnabled; case .amp: return audio.ampEnabled; case .cab: return audio.cabEnabled; case .eq: return audio.eqEnabled
         case .chorus: return audio.chorusEnabled; case .flanger: return audio.flangerEnabled; case .tremolo: return audio.tremoloEnabled
         case .delay: return audio.delayEnabled; case .reverb: return audio.reverbEnabled; case .irReverb: return audio.irReverbEnabled
         }
@@ -446,7 +468,7 @@ struct ContentView: View {
     private func enabled(_ b: ChainBlock) -> Binding<Bool> {
         switch b {
         case .gate: return $audio.gateEnabled; case .comp: return $audio.compEnabled; case .boost: return $audio.boostEnabled
-        case .drive: return $audio.driveEnabled; case .stomp: return $audio.stompEnabled; case .pedal: return $audio.pedalEnabled; case .amp: return $audio.ampEnabled; case .eq: return $audio.eqEnabled
+        case .drive: return $audio.driveEnabled; case .stomp: return $audio.stompEnabled; case .pedal: return $audio.pedalEnabled; case .amp: return $audio.ampEnabled; case .cab: return $audio.cabEnabled; case .eq: return $audio.eqEnabled
         case .chorus: return $audio.chorusEnabled; case .flanger: return $audio.flangerEnabled; case .tremolo: return $audio.tremoloEnabled
         case .delay: return $audio.delayEnabled; case .reverb: return $audio.reverbEnabled; case .irReverb: return $audio.irReverbEnabled
         }
@@ -517,10 +539,43 @@ struct ContentView: View {
                 Text("Mono chain → wide stereo out. Needs headphones or stereo monitors to hear.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
+            Divider().overlay(.secondary.opacity(0.2))
+            HStack(spacing: 8) {
+                Image(systemName: "repeat.circle.fill").foregroundStyle(.green)
+                Text("Looper").font(.subheadline.bold())
+                Spacer()
+                Text(audio.looperStateLabel).font(.caption.bold().monospacedDigit()).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                Button { audio.toggleLooper() } label: {
+                    Label(looperButtonText, systemImage: looperButtonIcon).frame(maxWidth: .infinity)
+                }.buttonStyle(.borderedProminent).tint(.green)
+                Button { audio.stopLooper() } label: { Image(systemName: "stop.fill") }.buttonStyle(.bordered)
+                Button { audio.clearLooper() } label: { Image(systemName: "trash") }.buttonStyle(.bordered).tint(.red)
+            }
+            sliderRow("Loop Level", value: $audio.loopLevel, range: 0...100, unit: "%")
         }
         .padding().frame(maxWidth: .infinity)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.secondary.opacity(0.25)))
+    }
+
+    private var looperButtonText: String {
+        switch audio.looperStateLabel {
+        case "REC": return "Stop & Play"
+        case "Play": return "Overdub"
+        case "Overdub": return "Stop Dub"
+        case "Stopped": return "Play"
+        default: return audio.looperHasLoop ? "Play" : "Record"
+        }
+    }
+    private var looperButtonIcon: String {
+        switch audio.looperStateLabel {
+        case "REC": return "stop.circle.fill"
+        case "Play", "Overdub": return "plus.circle.fill"
+        case "Stopped": return "play.fill"
+        default: return audio.looperHasLoop ? "play.fill" : "record.circle.fill"
+        }
     }
 
     // MARK: - Tuner sheet

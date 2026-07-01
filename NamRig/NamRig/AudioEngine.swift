@@ -22,6 +22,9 @@ final class RenderContext: @unchecked Sendable {
     let analysis = UnsafeMutableBufferPointer<Float>.allocate(capacity: 4096)  // dry-input ring for the tuner
     var analysisW = 0
 
+    // End-of-chain phrase looper (records / plays the final processed tone).
+    let looper = LooperEngine()
+
     // Tier-1 stereo output stage (mono chain → wide stereo). Bit-identical mono when stereoEnabled is false.
     let ping = PingPongDelay()
     let rev = StereoReverb()
@@ -187,6 +190,14 @@ final class AudioEngine {
     var stereoPingFb: Double = 30 { didSet { context.ping.feedbackPct = Float(stereoPingFb) } }
     var stereoSpace: Double = 18 { didSet { context.rev.mixPct = Float(stereoSpace) } }
     var stereoWidth: Double = 100 { didSet { context.ping.spreadPct = Float(stereoWidth); context.rev.widthPct = Float(stereoWidth) } }
+
+    // End-of-chain phrase looper.
+    var loopLevel: Double = 100 { didSet { context.looper.loopLevel = Float(loopLevel / 100) } }
+    private(set) var looperStateLabel = "Idle"
+    var looperHasLoop: Bool { context.looper.hasLoop }
+    func toggleLooper() { context.looper.toggle(); looperStateLabel = context.looper.stateName }
+    func stopLooper() { context.looper.stopPlayback(); looperStateLabel = context.looper.stateName }
+    func clearLooper() { context.looper.clear(); looperStateLabel = context.looper.stateName }
     var eqEnabled = true {
         didSet { eq.bypass.store(!eqEnabled, ordering: .relaxed) }
     }
@@ -199,6 +210,17 @@ final class AudioEngine {
     var delayFeedbackPct: Double = 35 { didSet { delay.feedback = Float(delayFeedbackPct / 100) } }
     var delayMixPct: Double = 30 { didSet { delay.mix = Float(delayMixPct / 100) } }
 
+    // Tap-tempo (Tempo.swift) — when delaySync is on, the delay time follows BPM × note division.
+    var tempo = TempoClock()
+    var bpm: Double {
+        get { tempo.bpm }
+        set { tempo.bpm = newValue; if delaySync { applyTempoToDelay() } }
+    }
+    var delaySync = false { didSet { if delaySync { applyTempoToDelay() } } }
+    var delayDivision: TempoClock.NoteDivision = .eighth { didSet { if delaySync { applyTempoToDelay() } } }
+    func tapTempo() { tempo.tap(at: ProcessInfo.processInfo.systemUptime); if delaySync { applyTempoToDelay() } }
+    private func applyTempoToDelay() { delayTimeMs = min(max(tempo.ms(delayDivision), 50), 1000) }
+
     var reverbEnabled = false { didSet { reverb.bypass.store(!reverbEnabled, ordering: .relaxed) } }
     var reverbDecayPct: Double = 70 { didSet { updateReverb() } }
     var reverbDampPct: Double = 30 { didSet { updateReverb() } }
@@ -207,6 +229,7 @@ final class AudioEngine {
     var irReverbEnabled = false { didSet { irReverb.bypass.store(!irReverbEnabled, ordering: .relaxed) } }
     var irReverbMixPct: Double = 35 { didSet { irReverb.mix = Float(irReverbMixPct / 100) } }
     var irReverbPredelayMs: Double = 0 { didSet { irReverb.setPredelay(ms: Float(irReverbPredelayMs)) } }
+    var cabEnabled = true { didSet { cab.bypass.store(!cabEnabled, ordering: .relaxed) } }
 
     var compEnabled = false { didSet { comp.bypass.store(!compEnabled, ordering: .relaxed) } }
     var compThresholdDb: Double = -18 { didSet { comp.thresholdDb = Float(compThresholdDb) } }
@@ -264,9 +287,9 @@ final class AudioEngine {
     }
 
     // Free-order chain — `blockOrder` is a permutation of all block kinds.
-    static let defaultOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .eq, .chorus, .flanger, .tremolo, .delay, .reverb, .irReverb]
+    static let defaultOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .cab, .eq, .chorus, .flanger, .tremolo, .delay, .reverb, .irReverb]
     private var indexByKind: [BlockKind: Int] = [:]
-    var blockOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .eq, .chorus, .flanger, .tremolo, .delay, .reverb, .irReverb]
+    var blockOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .cab, .eq, .chorus, .flanger, .tremolo, .delay, .reverb, .irReverb]
     func applyOrder() { context.chain.reorder(blockOrder.compactMap { indexByKind[$0] }) }
     func setOrder(_ newOrder: [BlockKind]) { blockOrder = newOrder; applyOrder() }
     var availableToAdd: [BlockKind] { BlockKind.allCases.filter { !blockOrder.contains($0) } }
@@ -285,7 +308,7 @@ final class AudioEngine {
     func setBlockEnabled(_ kind: BlockKind, _ on: Bool) {
         switch kind {
         case .gate: gateEnabled = on; case .comp: compEnabled = on; case .boost: boostEnabled = on
-        case .drive: driveEnabled = on; case .stomp: stompEnabled = on; case .pedal: pedalEnabled = on; case .amp: ampEnabled = on
+        case .drive: driveEnabled = on; case .stomp: stompEnabled = on; case .pedal: pedalEnabled = on; case .amp: ampEnabled = on; case .cab: cabEnabled = on
         case .eq: eqEnabled = on; case .chorus: chorusEnabled = on; case .flanger: flangerEnabled = on
         case .tremolo: tremoloEnabled = on; case .delay: delayEnabled = on; case .reverb: reverbEnabled = on
         case .irReverb: irReverbEnabled = on
@@ -294,7 +317,7 @@ final class AudioEngine {
     func isBlockEnabled(_ kind: BlockKind) -> Bool {
         switch kind {
         case .gate: return gateEnabled; case .comp: return compEnabled; case .boost: return boostEnabled
-        case .drive: return driveEnabled; case .stomp: return stompEnabled; case .pedal: return pedalEnabled; case .amp: return ampEnabled
+        case .drive: return driveEnabled; case .stomp: return stompEnabled; case .pedal: return pedalEnabled; case .amp: return ampEnabled; case .cab: return cabEnabled
         case .eq: return eqEnabled; case .chorus: return chorusEnabled; case .flanger: return flangerEnabled
         case .tremolo: return tremoloEnabled; case .delay: return delayEnabled; case .reverb: return reverbEnabled
         case .irReverb: return irReverbEnabled
@@ -318,6 +341,7 @@ final class AudioEngine {
     private let drive = DriveBlock()
     private let circuitDrive = CircuitDriveBlock(kind: .stomp)
     private let amp = AmpBlock()
+    private let cab = CabBlock(kind: .cab)
     private let eq = EQBlock()
     private let delay = DelayBlock()
     private let reverb = ReverbBlock()
@@ -339,7 +363,7 @@ final class AudioEngine {
     init() {
         refreshModels()
         if !models.contains(where: { $0.id == selectedModelID }) { selectedModelID = models.first?.id ?? selectedModelID }
-        let chainBlocks: [AudioBlock] = [gate, comp, boost, drive, circuitDrive, pedal, amp, eq, chorus, flanger, tremolo, delay, reverb, irReverb]
+        let chainBlocks: [AudioBlock] = [gate, comp, boost, drive, circuitDrive, pedal, amp, cab, eq, chorus, flanger, tremolo, delay, reverb, irReverb]
         context.chain.install(chainBlocks)
         for (i, b) in chainBlocks.enumerated() { indexByKind[b.kind] = i }
         applyOrder()
@@ -432,14 +456,14 @@ final class AudioEngine {
         try? FileManager.default.copyItem(at: url, to: dest)
         cabIRFile = url.lastPathComponent
         cabIRName = url.deletingPathExtension().lastPathComponent
-        amp.setIR(taps)
+        cab.setIR(taps)
     }
-    func clearCabIR() { cabIRFile = ""; cabIRName = "None"; amp.clearIR() }
+    func clearCabIR() { cabIRFile = ""; cabIRName = "None"; cab.clearIR() }
     private func applyCabIR(_ file: String) {
         guard !file.isEmpty else { clearCabIR(); return }
         let url = irsDir.appendingPathComponent(file)
         if let taps = Self.loadIRSamples(url, targetSR: preferredSampleRate), !taps.isEmpty {
-            cabIRFile = file; cabIRName = url.deletingPathExtension().lastPathComponent; amp.setIR(taps)
+            cabIRFile = file; cabIRName = url.deletingPathExtension().lastPathComponent; cab.setIR(taps)
         } else { clearCabIR() }
     }
     func loadReverbIR(from url: URL) {
@@ -643,8 +667,10 @@ final class AudioEngine {
         flangerEnabled = p.flangerOn; flangerRateHz = p.flangerRate; flangerDepthMs = p.flangerDepth; flangerFeedbackPct = p.flangerFb; flangerMixPct = p.flangerMix
         tremoloEnabled = p.tremoloOn; tremoloRateHz = p.tremoloRate; tremoloDepthPct = p.tremoloDepth
         reverbType = p.reverbType
-        let ord = p.order.compactMap { BlockKind(rawValue: $0) }   // a preset's chain may be a curated subset
-        blockOrder = ord.isEmpty ? AudioEngine.defaultOrder : ord
+        var ord = p.order.compactMap { BlockKind(rawValue: $0) }   // a preset's chain may be a curated subset
+        if ord.isEmpty { ord = AudioEngine.defaultOrder }
+        if !ord.contains(.cab), let ai = ord.firstIndex(of: .amp) { ord.insert(.cab, at: ord.index(after: ai)) }   // migrate: Cab is its own block now
+        blockOrder = ord
         applyOrder()
         pedalEnabled = p.pedalOn; pedalDriveDb = p.pedalDrive; pedalLevelDb = p.pedalLevel
         selectedPedalModelID = p.pedalModel.isEmpty ? nil : p.pedalModel
@@ -704,6 +730,7 @@ final class AudioEngine {
         context.ring.reset()
         context.chain.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
         context.chain.reset()
+        context.looper.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
         context.ping.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
         context.rev.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
         context.ping.reset(); context.rev.reset()
@@ -745,6 +772,7 @@ final class AudioEngine {
 
             // The block chain (mono).
             context.chain.render(s, n)
+            context.looper.process(s, n)   // end-of-chain looper: record / play the final tone
 
             var outP: Float = 0
             for i in 0..<n { let a = abs(s[i]); if a.isFinite && a > outP { outP = a } }

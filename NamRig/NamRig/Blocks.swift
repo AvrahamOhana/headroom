@@ -24,6 +24,7 @@ enum BlockKind: String, Sendable, CaseIterable {
     case stomp = "Stomp"
     case pedal = "Pedal"
     case amp = "Amp"
+    case cab = "Cab"
     case eq = "EQ"
     case chorus = "Chorus"
     case flanger = "Flanger"
@@ -170,6 +171,53 @@ final class AmpBlock: AudioBlock {
             vDSP_conv(scr, 1, rev, 1, s, 1, vDSP_Length(n), vDSP_Length(irLen))
             memcpy(h, scr + n, need * MemoryLayout<Float>.size)
         }
+    }
+    deinit { irRev?.deallocate(); irHist?.deallocate(); irScratch?.deallocate() }
+}
+
+/// Cab IR — standalone post-amp convolution block (extracted from AmpBlock so "Cab" is its own
+/// reorderable chain block). 2048-tap mono IR via vDSP overlap; RT-safe data-copy swap.
+nonisolated final class CabBlock: AudioBlock {
+    private let maxIR = 2048
+    private var maxBlk = 4096
+    private var irRev: UnsafeMutableBufferPointer<Float>?
+    private var irHist: UnsafeMutableBufferPointer<Float>?
+    private var irScratch: UnsafeMutableBufferPointer<Float>?
+    private var irLen = 0
+    private let irOn = Atomic<Bool>(false)
+
+    override init(kind: BlockKind = .cab) { super.init(kind: kind) }
+
+    override func prepare(sampleRate: Double, maxBlock: Int) {
+        maxBlk = max(maxBlock, 1)
+        if irRev == nil {
+            irRev = .allocate(capacity: maxIR); irRev!.initialize(repeating: 0)
+            irHist = .allocate(capacity: maxIR); irHist!.initialize(repeating: 0)
+            irScratch = .allocate(capacity: maxIR + maxBlk); irScratch!.initialize(repeating: 0)
+        }
+    }
+    override func reset() { if let h = irHist?.baseAddress { for i in 0..<maxIR { h[i] = 0 } } }
+
+    func setIR(_ taps: [Float]) {
+        guard let rev = irRev?.baseAddress, let h = irHist?.baseAddress else { return }
+        let n = min(taps.count, maxIR)
+        irOn.store(false, ordering: .releasing)
+        guard n > 1 else { irLen = 0; return }
+        for i in 0..<n { rev[i] = taps[n - 1 - i] }
+        for i in 0..<maxIR { h[i] = 0 }
+        irLen = n
+        irOn.store(true, ordering: .releasing)
+    }
+    func clearIR() { irOn.store(false, ordering: .releasing) }
+
+    override func process(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
+        guard irOn.load(ordering: .acquiring), irLen > 1, n <= maxBlk,
+              let rev = irRev?.baseAddress, let h = irHist?.baseAddress, let scr = irScratch?.baseAddress else { return }
+        let need = irLen - 1
+        memcpy(scr, h, need * MemoryLayout<Float>.size)
+        memcpy(scr + need, s, n * MemoryLayout<Float>.size)
+        vDSP_conv(scr, 1, rev, 1, s, 1, vDSP_Length(n), vDSP_Length(irLen))
+        memcpy(h, scr + n, need * MemoryLayout<Float>.size)
     }
     deinit { irRev?.deallocate(); irHist?.deallocate(); irScratch?.deallocate() }
 }

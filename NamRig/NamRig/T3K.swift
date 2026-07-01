@@ -105,10 +105,11 @@ final class T3KClient: NSObject, ASWebAuthenticationPresentationContextProviding
 
     // MARK: API
 
-    func searchTones(_ query: String, gear: String, architecture: String, page: Int = 1) async throws -> (tones: [T3KTone], totalPages: Int) {
+    func searchTones(_ query: String, gear: String, architecture: String, format: String = "nam", page: Int = 1) async throws -> (tones: [T3KTone], totalPages: Int) {
         struct Env: Codable { let data: [T3KTone]?; let tones: [T3KTone]?; let total_pages: Int? }
         var c = URLComponents(string: "\(Self.base)/tones/search")!
-        var items: [URLQueryItem] = [.init(name: "format", value: "nam"), .init(name: "page_size", value: "25"), .init(name: "page", value: "\(page)")]
+        var items: [URLQueryItem] = [.init(name: "page_size", value: "25"), .init(name: "page", value: "\(page)")]
+        if !format.isEmpty { items.append(.init(name: "format", value: format)) }
         if !query.isEmpty { items.append(.init(name: "query", value: query)) }
         if !gear.isEmpty { items.append(.init(name: "gears", value: gear)) }
         if !architecture.isEmpty { items.append(.init(name: "architecture", value: architecture)) }
@@ -134,7 +135,8 @@ final class T3KClient: NSObject, ASWebAuthenticationPresentationContextProviding
         if let token = accessToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, _) = try await URLSession.shared.data(for: req)
         let safe = m.name.replacingOccurrences(of: "/", with: "-")
-        let dest = FileManager.default.temporaryDirectory.appendingPathComponent("\(safe).nam")
+        let ext = (URL(string: m.model_url)?.pathExtension).flatMap { $0.isEmpty ? nil : $0 } ?? "nam"   // .nam (amp/pedal) or .wav (cab IR)
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent("\(safe).\(ext)")
         try data.write(to: dest)
         return dest
     }
@@ -176,7 +178,7 @@ private let t3kGears: [(String, String)] = [("All gear", ""), ("Amp", "amp"), ("
 private let t3kArchs: [(String, String)] = [("A2", "2"), ("A1", "1"), ("Custom", "custom")]
 
 struct T3KBrowser: View {
-    enum Target: Identifiable { case amp, pedal; var id: Self { self } }
+    enum Target: Identifiable { case amp, pedal, cab; var id: Self { self } }
     let audio: AudioEngine
     let target: Target
     @Environment(\.dismiss) private var dismiss
@@ -188,7 +190,8 @@ struct T3KBrowser: View {
     init(audio: AudioEngine, target: Target = .amp) {
         self.audio = audio
         self.target = target
-        _gear = State(initialValue: target == .pedal ? "pedal" : "amp-cab")
+        _gear = State(initialValue: target == .pedal ? "pedal" : (target == .cab ? "cab" : "amp-cab"))
+        _arch = State(initialValue: target == .cab ? "" : "2")   // cab IRs have no NAM architecture
     }
     @State private var tones: [T3KTone] = []
     @State private var loading = false
@@ -281,7 +284,7 @@ struct T3KBrowser: View {
     private func search() async {
         loading = true; status = ""; page = 1; canLoadMore = true; defer { loading = false }
         do {
-            let r = try await client.searchTones(query, gear: gear, architecture: arch, page: 1)
+            let r = try await client.searchTones(query, gear: gear, architecture: arch, format: target == .cab ? "" : "nam", page: 1)
             tones = r.tones; totalPages = r.totalPages
             canLoadMore = page < totalPages
         } catch { status = error.localizedDescription; tones = []; canLoadMore = false }
@@ -292,7 +295,7 @@ struct T3KBrowser: View {
         loadingMore = true; defer { loadingMore = false }
         let next = page + 1
         do {
-            let r = try await client.searchTones(query, gear: gear, architecture: arch, page: next)
+            let r = try await client.searchTones(query, gear: gear, architecture: arch, format: target == .cab ? "" : "nam", page: next)
             let existing = Set(tones.map { $0.id })
             let fresh = r.tones.filter { !existing.contains($0.id) }
             tones.append(contentsOf: fresh)
@@ -327,7 +330,11 @@ struct T3KModelList: View {
                             Button {
                                 Task {
                                     busy = m.id
-                                    if let url = try? await client.download(m) { audio.importModel(from: url, artworkURL: tone.thumb, gear: tone.gear, asPedal: target == .pedal); onDownloaded() }
+                                    if let url = try? await client.download(m) {
+                                        if target == .cab { audio.loadCabIR(from: url) }
+                                        else { audio.importModel(from: url, artworkURL: tone.thumb, gear: tone.gear, asPedal: target == .pedal) }
+                                        onDownloaded()
+                                    }
                                     busy = nil
                                 }
                             } label: { Image(systemName: "arrow.down.circle.fill").font(.title2) }
