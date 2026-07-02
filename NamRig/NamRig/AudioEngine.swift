@@ -86,7 +86,7 @@ final class AudioEngine {
         // licensed for commercial redistribution (e.g. your own NAM training, or a CC0
         // capture). Do NOT bundle third-party TONE3000 captures. To add one, drop
         // `YourModel.nam` in NamRig/Models and add ("YourModel", "Display Name") below.
-        let bundled: [(String, String)] = []
+        let bundled: [(String, String)] = [("Bugera V5", "Bugera V5")]
         for (res, name) in bundled {
             if let p = Bundle.main.path(forResource: res, ofType: "nam") {
                 list.append(ToneModel(id: res, name: name, path: p, bundled: true, gear: "amp"))
@@ -162,7 +162,7 @@ final class AudioEngine {
     var currentPresetName: String { presets.indices.contains(currentPresetIndex) ? presets[currentPresetIndex].name : "Init" }
 
     // UI parameters → blocks / engine.
-    var selectedModelID: String = "" {
+    var selectedModelID: String = "Bugera V5" {
         didSet { if oldValue != selectedModelID { loadModel() } }
     }
     var ampEnabled = true {
