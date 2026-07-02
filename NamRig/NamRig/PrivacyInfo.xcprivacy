@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- NamRig does not track users across other companies' apps/websites (no ATT). -->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<!--
+	  Data collected by the app itself. NamRig runs no analytics/ads SDK and sends no
+	  data to Anthropic/first-party servers. The only off-device network is the
+	  user-initiated TONE3000 login + browsing (a third-party service the user chooses to
+	  sign into). The OAuth token is stored locally in UserDefaults, not transmitted to us.
+	  If you later add analytics or a backend, declare the collected types here AND in the
+	  App Store Connect "App Privacy" questionnaire.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+
+	<!-- Required-reason APIs actually used by NamRig. -->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<!-- UserDefaults: TONE3000 bearer token + app settings (T3K.swift). -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!-- CA92.1: access info stored only for the app itself. -->
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

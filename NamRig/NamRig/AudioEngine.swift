@@ -82,7 +82,12 @@ final class AudioEngine {
 
     func refreshModels() {
         var list: [ToneModel] = []
-        for (res, name) in [("T3K-sweep-v3-FX", "T3K A2")] {
+        // Factory-bundled captures. Only ship models you OWN or that are explicitly
+        // licensed for commercial redistribution (e.g. your own NAM training, or a CC0
+        // capture). Do NOT bundle third-party TONE3000 captures. To add one, drop
+        // `YourModel.nam` in NamRig/Models and add ("YourModel", "Display Name") below.
+        let bundled: [(String, String)] = []
+        for (res, name) in bundled {
             if let p = Bundle.main.path(forResource: res, ofType: "nam") {
                 list.append(ToneModel(id: res, name: name, path: p, bundled: true, gear: "amp"))
             }
@@ -157,7 +162,7 @@ final class AudioEngine {
     var currentPresetName: String { presets.indices.contains(currentPresetIndex) ? presets[currentPresetIndex].name : "Init" }
 
     // UI parameters → blocks / engine.
-    var selectedModelID: String = "T3K-sweep-v3-FX" {
+    var selectedModelID: String = "" {
         didSet { if oldValue != selectedModelID { loadModel() } }
     }
     var ampEnabled = true {

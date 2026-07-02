@@ -30,8 +30,15 @@ Fractal Axe-FX and Neural Quad Cortex — but **one-time purchase, no subscripti
 
 ## 2. Resume on the new MacBook
 
-1. **Get the code:** it's a git repo. `git clone <your remote>` or copy the folder. (There is no
-   remote configured yet — add one with `git remote add origin …` and push if you want cloud backup.)
+1. **Get the code:** it's a git repo. (There is no remote configured yet — add one with
+   `git remote add origin …` and push if you want cloud backup.)
+   - **Clone WITH submodules** — NAM core is a submodule (nesting AudioDSPTools + eigen); a plain
+     clone leaves `ThirdParty/NeuralAmpModelerCore` empty and the build can't find the NAM core:
+     ```
+     git clone --recurse-submodules <your remote>
+     # already cloned (or copied the folder) without them? run:
+     git submodule update --init --recursive
+     ```
 2. **Xcode:** open `NamRig/NamRig.xcodeproj`. Built with the iOS 26.5 SDK / Xcode 26.
 3. **Pair the iPhone:** plug in, trust the Mac. Find its id with `xcrun devicectl list devices`
    and update `DEV=` in `tools/deploy.sh` (current device id: `2B76597E-2150-5B8F-AC97-39A954AFB44A`,
@@ -197,3 +204,77 @@ keys.md                GITIGNORED — TONE3000 token; re-auth in-app on a new ma
 
 **Security note:** model real pedal/amp circuit *behavior* (legal); never ship trademarked names/logos —
 the OD models use allusive names + `CircuitDriveBlock.disclaimer` ("not affiliated…"). Keep `keys.md` ignored.
+
+---
+
+## 8. Legal / App Store readiness (added 2026-07-02)
+
+Three shipping blockers fixed + a legal audit done this session. **Still-open items are your action, not code.**
+
+### Done in code
+- **`PrivacyInfo.xcprivacy`** — required App Store privacy manifest. Declares no tracking, no collected
+  data types (TONE3000 login is user-initiated, token stored locally), and the one required-reason API:
+  `UserDefaults` (`CA92.1`, the T3K token in `T3K.swift`). Auto-bundles via synced folders.
+- **`UIBackgroundModes = audio`** (Debug+Release in pbxproj) — audio survives lock/app-switch. Session is
+  already `.playAndRecord`.
+- **Deployment target 26.5 → 18.0.** `Atomic` (RT-safe blocks) is iOS 18+, so 18.0 is the floor; covers
+  iPhone XS/11-era + up and the test iPad. DON'T go lower without rewriting the `Atomic` usage.
+- **Removed bundled 3rd-party capture** `T3K-sweep-v3-FX.nam` (was `modeled_by: elielccarvalho`).
+  Bundling ANY TONE3000 tone violates their ToS ("may not package, bundle, or redistribute tones"). App
+  now ships with NO factory model — `refreshModels()` has an empty `bundled` list + a one-line hook to add
+  a capture YOU OWN. `selectedModelID` / `Preset.model` defaults are now `""`.
+- **`Acknowledgements.swift`** (Settings → Legal) — MIT notices (NAM core + AudioDSPTools, © Steven
+  Atkinson) + Eigen MPL-2.0. Required by those licenses when distributing.
+
+### Still open (NOT code — do before shipping)
+- **Apple Developer Program** enrollment ($99/yr). **Small Business Program** → 15% cut (do it).
+- **Email support@tone3000.com** for written OK on commercial API use (their Terms require permission for
+  commercial distribution of accessed content; docs require it for production apps). Draft was written this
+  session. Our runtime OAuth browse/download of the user's own/favorited/public tones IS the intended use;
+  just get it on record.
+- **Privacy Policy URL + Support URL** (App Store Connect mandatory; TONE3000 login makes the policy
+  non-optional). Screenshots, App Privacy questionnaire, $49.99 price tier.
+- **Confirm the app icon is original art** (it is abstract/no logos — looks clean; just confirm you own it).
+- **TestFlight → submit → App Review.** Smoke-test on device first (the iOS 18 target has NOT run on
+  hardware yet — iPad needs Developer Mode enabled).
+
+## 9. Capturing your own NAM models (added 2026-07-02)
+
+**Why:** the ONLY legally clean factory content is captures you own — your own amps/pedals (or a plugin YOU
+made). Never capture+ship a commercial plugin or someone's TONE3000 tone (both = piracy per TONE3000 policy).
+
+### Gear (owned, zero purchases needed)
+Focusrite Scarlett 2i2 + basic condenser mic + iRig HD 2 (has a dedicated **Amp Out** at guitar level/impedance
+— replaces a reamp/DI box). Bugera V5 (5 W tube combo, power attenuator 5W/1W/0.1W — capture cranked tones at
+low volume). Tube Screamer + Ruby (LM386) DIY builds = great capture SUBJECTS (original, owned).
+
+### Hum fix (learned the hard way)
+Reamping hummed → **ground loop via the external monitor** (mains-earthed + video cable to Mac). Fix that got
+it clean: **unplug the external monitor** + **run the Mac on battery** during the record. NEVER ground-lift the
+tube amp's mains earth (lethal). If residual hum on the amp-send, a passive ¼" ground-loop isolator (Behringer
+HD400 ~$25) breaks it — but the monitor/battery fix was enough here.
+
+### Amp capture (mic'd) — DAW = Studio One 5 (GarageBand can't route per-track outputs)
+1. *Audio MIDI Setup* → **Aggregate Device** (Scarlett + iRig), both **48 kHz**, drift-correction on non-master.
+2. Studio One → Audio Setup → device = the aggregate; Song Setup → **48 kHz**.
+3. **Audio I/O Setup:** Inputs → mono **"Mic"** = Scarlett in 1. Outputs → mono **"Reamp"** = iRig Amp Out
+   channel (Main stays on Scarlett outs for headphone monitoring).
+4. Track A = `input.wav` (the NAM standardized test file, 48 kHz), **Output → "Reamp"**, **Timestretch OFF**,
+   no inserts. Track B = mic, **Input "Mic"**, no inserts, record-armed.
+5. Amp on tone @ 0.1 W, condenser on the grille ~1–2". Record; let `input.wav` play through.
+6. Export the mic track → **WAV, 24-bit, 48 kHz, MONO, no normalization/dither/FX** = `output.wav`.
+
+### Pedal capture (Tube Screamer) — simpler, no mic, no hum
+iRig Amp Out → pedal → straight back into a line/instrument input. All electrical, no aggregate/mic. Drops into
+NamRig's pedal-capture slot.
+
+### VST-plugin capture (in-the-box) — technique OK, legal ONLY for plugins you own/made
+Track with `input.wav` (timestretch off) → plugin as insert → Export Mixdown = `output.wav`. Sample-aligned;
+NAM auto-aligns anyway. **Do NOT ship captures of commercial/paid plugins.**
+
+### Train
+On the **desktop PC (RTX 3060 Ti, CUDA)** — install `neural-amp-modeler` with a CUDA PyTorch build; a standard
+model trains in minutes. Mac works (CPU/MPS) but slower. Or zero-install: TONE3000 online trainer / NAM Colab.
+The trainer auto-detects round-trip latency from the calibration blips at the start of `input.wav`, so timing
+in the DAW need not be sample-perfect. Drop the resulting `.nam` in `NamRig/Models` + add one line to the
+`bundled` list in `refreshModels()` → ships as an owned factory tone.

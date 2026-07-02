@@ -723,6 +723,11 @@ struct ContentView: View {
                         }
                     }
                 }
+                Section("Legal") {
+                    NavigationLink { AcknowledgementsView() } label: {
+                        Label("Acknowledgements", systemImage: "doc.text")
+                    }
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

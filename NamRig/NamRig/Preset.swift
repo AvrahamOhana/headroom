@@ -9,7 +9,7 @@ import Foundation
 struct Preset: Codable, Identifiable {
     var id = UUID()
     var name = "Preset"
-    var model = "T3K-sweep-v3-FX"
+    var model = ""
 
     var ampOn = true,    ampDrive = 0.0
     var gateOn = true,   gateThr = -34.0
