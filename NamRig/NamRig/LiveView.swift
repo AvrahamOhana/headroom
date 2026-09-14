@@ -5,7 +5,6 @@
 //
 
 import SwiftUI
-import UIKit
 
 struct LiveView: View {
     let audio: AudioEngine
@@ -14,7 +13,7 @@ struct LiveView: View {
 
     var body: some View {
         ZStack {
-            Color(.systemBackground).ignoresSafeArea()
+            Color.platformBackground.ignoresSafeArea()
             VStack(spacing: 0) {
                 topRow
                 Spacer(minLength: 8)
@@ -27,9 +26,9 @@ struct LiveView: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
         }
-        .statusBarHidden(true)
-        .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        .hideStatusBar()
+        .onAppear { IdleTimer.keepAwake(true) }
+        .onDisappear { IdleTimer.keepAwake(false) }
     }
 
     // MARK: top — shared signal strip + run light + close
@@ -135,7 +134,7 @@ struct LiveView: View {
         }
     }
     private func navButton(_ icon: String, action: @escaping () -> Void) -> some View {
-        Button { UIImpactFeedbackGenerator(style: .rigid).impactOccurred(); action() } label: {
+        Button { Haptics.impact(.rigid); action() } label: {
             Image(systemName: icon).font(.system(size: 26, weight: .bold))
                 .frame(maxWidth: .infinity).frame(height: 60)
                 .foregroundStyle(.primary)

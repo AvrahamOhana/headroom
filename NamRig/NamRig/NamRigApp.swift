@@ -14,6 +14,12 @@ struct NamRigApp: App {
         WindowGroup {
             ContentView()
                 .preferredColorScheme(uiAppearance == 1 ? .light : uiAppearance == 2 ? .dark : nil)
+                #if os(macOS)
+                .frame(minWidth: 560, minHeight: 720)
+                #endif
         }
+        #if os(macOS)
+        .defaultSize(width: 620, height: 900)
+        #endif
     }
 }

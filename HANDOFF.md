@@ -126,30 +126,72 @@ first thing and smoke-test them**:
   RT-safe Atomic state; `context.looper.process(s,n)` runs right after `chain.render`; transport
   (REC/STOP/CLEAR + Loop Level) lives in the OUTPUT block editor.
 
-### Written, NOT wired (safe — compiles unused)
-- **Wah** (`Wah.swift`) — a real swept resonant filter (TPT-SVF bandpass, 400→2200 Hz, manual `position`
-  + auto-envelope). This is the **expression-pedal** target. Made self-contained (its `init(kind:)` has no
-  `.wah` default) so it can't break the build. DSP verified: `swift tools/wah_test.swift` PASSES — the
-  resonant peak sweeps 400 → 900 → 2200 Hz as `position` goes heel→toe.
+### Sound-quality / MIDI / TONE3000 / UI pass (2026-09-14) — compiles green, headless-verified, PENDING DEVICE SMOKE-TEST
+Run `tools/deploy.sh` and play through it. Verified numerically by **`tools/blocks_test.swift`** (compiles the REAL
+`Blocks.swift`/`Wah.swift`/`ReverbAlgorithms.swift` against a stub `NAMModel` — no more mirror copies; run command
+is in its header; must print `ALL PASS`).
+- **NAM noise floor.** `NAMModel` bridge now exposes `loudness` / `inputLevelDbu` / `outputLevelDbu` (NAM core
+  metadata). `loadModel` level-matches with the trainer's loudness (target −18 dB, like the official plugin) and
+  only falls back to the sine probe when the file lacks it; **makeup is capped at +12 dB** (was up to +36 dB — a
+  quiet capture boosted that far is pure hiss). `AmpBlock` got a 30 Hz 2nd-order HPF *before* the network (high-
+  gain captures amplify rumble/hum) and smoothed input/makeup gains. AmpBlock's dead IR code was deleted.
+- **Gate v2** (`GateBlock`): hysteresis (opens at thr, closes 6 dB lower), 40 ms hold, `rangeDb` floor (−90 =
+  mute … −20 = gentle expander), 120 Hz side-chain HPF, sample-rate-correct times. New params
+  `gateReleaseMs`/`gateRangeDb` (preset `gateRel`/`gateRange`).
+- **FX**: `DelayBlock` is tape-style (Hermite read, time glides — `snapTime()` on preset load — feedback loop
+  LPF `tone` + 110 Hz HPF + tanh soft-clip; param `delayTonePct`/preset `delayTone`). `CompressorBlock` has a
+  peak detector → 6 dB soft-knee gain computer → attack/release on the GR (exposes `gainReductionDb`, metered in
+  the editor). `ChorusBlock` = 2 anti-phase voices + Hermite + 150 Hz wet HPF. `FlangerBlock` = Hermite +
+  tanh-limited, HPF'd feedback. `Smoother` (one-pole) on boost, mix knobs, master output (`RenderContext.outSm`).
+- **Wah is WIRED** (`.wah` BlockKind, addable, pre-amp; pedal glide smoothing; `MIDIParam.wah` = expression pedal).
+- **MIDI** (`MIDIManager.swift`, rewritten): **OUT** — "NamRig Out" virtual source + all hardware destinations;
+  PC on preset load (+ optional Bank Select), **per-preset send list** (`Preset.midiOut: [MIDIOutMessage]`, edited
+  in the OUT block → "MIDI Out"), CC feedback when a mapped param moves in the UI (`AudioEngine.paramDidChange`,
+  suppressed during `apply()`), optional MIDI clock out. **IN** — notes as well as CCs, per-mapping Press/Latch
+  (momentary footswitches no longer toggle twice), Bank Select, MIDI clock in → tempo (`ClockCounter`, off-main),
+  new targets: looper, looper stop, tap tempo, mute, tuner (`AudioEngine.tunerRequested`). **Bluetooth MIDI**
+  pairing sheet (`BluetoothMIDI.swift`, CoreAudioKit; `NSBluetoothAlwaysUsageDescription` added to pbxproj).
+  Activity dot on the header MIDI button; last received / last sent shown in the MIDI sheet.
+- **TONE3000** (`T3K.swift`, rewritten): refresh tokens (`t3k_refresh`/`t3k_expires`, auto-refresh + one retry on
+  401), profile, tabs Search / Trending / Favorites / Mine / Downloaded (`/tones/{created,favorited,downloaded}`,
+  `/tones/trending`), sort (best-match/trending/newest/downloads/oldest), Calibrated + Verified chips, favorite
+  toggle (swipe or detail page, `PUT/DELETE /tones/{id}/favorite`), tone detail page (cover/description/tags),
+  streaming download with progress, "in library" badge (`T3KLibrary` = downloaded tone IDs in UserDefaults),
+  429 rate-limit message.
+- **UI**: `Knob.swift` — rotary knobs (drag up/down, double-tap = default, haptic detent, bipolar arc for EQ),
+  `KnobGrid` adaptive rows, `FootswitchToggle`. All block editors + the OUT block use knobs. Header: Tuner /
+  MIDI / Settings are direct buttons again.
 
 ---
 
+### macOS build (2026-09-14) — ONE multiplatform target, runs natively on the Mac
+- pbxproj: `SDKROOT = auto`, `SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx"`, `MACOSX_DEPLOYMENT_TARGET = 15.0`
+  (floor because of `Atomic`), `SUPPORTS_MACCATALYST = NO`, macOS-only entitlements `NamRig/NamRig-macOS.entitlements`
+  (app-sandbox + audio-input + network.client + user-selected files + bluetooth), hardened runtime.
+- Build: `xcodebuild build -project NamRig/NamRig.xcodeproj -scheme NamRig -destination 'platform=macOS' -quiet`
+  → `~/Library/Developer/Xcode/DerivedData/NamRig-*/Build/Products/Debug/NamRig.app` (`open` it). iOS build unchanged.
+- `Platform.swift` is the ONLY iOS/macOS seam for the UI: `Haptics`, `Pasteboard`, `IdleTimer`, `Image(file:)`,
+  `Color.platformBackground`, and the modifiers `sheetSize` (detents on iOS / fixed frame on Mac), `inlineTitle`,
+  `fullScreen`, `alwaysEditing`, `hideStatusBar`. Don't `import UIKit` elsewhere.
+- `AudioDevices.swift` (macOS only): CoreAudio HAL enumerate / assign a device to an AVAudioEngine I/O node
+  (`kAudioOutputUnitProperty_CurrentDevice`) / per-device buffer frames. `AudioEngine` on macOS: no AVAudioSession —
+  `configureSession()` assigns `inputDeviceName`/`outputDeviceName` (persisted by NAME in UserDefaults) and sets the
+  buffer size on both devices; Settings → Audio has the pickers + a 64-frame option. Different in/out devices drift
+  (separate clocks) → tell users to use one interface or an Aggregate Device.
+- BLE-MIDI sheet (`BluetoothMIDI.swift`) is `#if os(iOS)`; on Mac pair pedals in Audio MIDI Setup.
+- **`tools/render.sh <model.nam> <in.wav> <out.wav> [--no-gate] [--legacy-level] [--drive dB] [--noise dB] [--hum dB]`**
+  — OFFLINE RENDER through the REAL NAM core (compiles NAMCore + NAMModel.mm + Blocks.swift into a CLI, cached in
+  /tmp). Prints peak / RMS / 5 %-window noise floor / 95 %-window signal / max sample step / NaN count for IN and OUT
+  and writes the output .wav to listen to. `--legacy-level` = the pre-2026-09-14 auto-level for A/B. Measured on the
+  Bugera V5 with `--noise -75 --hum -60`: legacy trim +17.1 dB → output +4.0 dBFS (clipping), floor −62 dB; new trim
+  +8.2 dB (loudness metadata −26.2) → −4.9 dBFS, floor −71 dB; + gate → floor −119 dB.
+  Test DI: `ThirdParty/NeuralAmpModelerCore/example_audio/input.wav` (synthetic — digital silence; add `--noise`).
+
 ## 6. Pending work — pick up here (in priority order)
 
-### A. Finish the Wah (≈ mirror the `.stomp`/`.cab` block wiring)
-1. `Blocks.swift`: add `case wah = "Wah"` to `BlockKind`.
-2. `Wah.swift`: restore `override init(kind: BlockKind = .wah)`.
-3. `AudioEngine.swift`: `private let wah = WahBlock(kind: .wah)`; add to `chainBlocks` (installed, but
-   **addable** — do NOT put in `defaultOrder`); @Observable params `wahEnabled/wahPosition/wahAuto/
-   wahSense/wahMix` with `didSet → wah.…`; add `.wah` to `setBlockEnabled`/`isBlockEnabled`.
-4. `MIDIManager.swift`: add `MIDIParam.wah` (range 0…1); `AudioEngine.setParam` case `.wah: wahPosition = v`
-   — **this is what makes an expression pedal work** (map the pedal's CC → `.wah` via MIDI-learn).
-5. `ContentView.swift`: `ChainBlock.wah` (the 7 switches: case list / kind / init? / short "WAH" / full
-   "Wah" / icon e.g. "dial.min.fill" / color) + a `controls(.wah)` editor (Auto toggle, Position slider,
-   Sensitivity, Mix) + `isOn`/`enabled`.
-6. `Preset.swift`: add `wahOn/wahPos/wahAuto/wahSense/wahMix` + the tolerant `g(.…)` decoder lines +
-   `capture()`/`apply()` in `AudioEngine`.
-7. `swift tools/wah_test.swift` should show the resonant peak sweeping heel→toe. Then `tools/deploy.sh`.
+### A. Device smoke-test the 2026-09-14 pass (above), then commit
+Gate thresholds may feel different (detector is HPF'd + envelope-based); default preset thresholds are unchanged.
+Listen for: hiss between notes, delay repeats decaying musically, no zipper on knobs, expression pedal → Wah.
 
 ### B. Recorder (verify ON DEVICE — can't headless-test AVAudioEngine)
 New `Recorder.swift` `@MainActor @Observable`: `engine.mainMixerNode.installTap(onBus:0,bufferSize:4096,
@@ -188,16 +230,19 @@ NamRig/NamRig/
   StereoFX.swift       PingPongDelay + StereoReverb (wet-only) + equalPowerPan  (Tier-1 stereo output)
   LooperEngine.swift   end-of-chain phrase looper                 (NEW, wired)
   Tempo.swift          TempoClock value type (tap tempo)          (NEW, wired)
-  Wah.swift            WahBlock resonant wah                       (NEW, NOT wired)
-  ContentView.swift    main UI: header, presetBar, chain strip + tile/editor, OUTPUT block, all sheets
+  Wah.swift            WahBlock resonant wah (wired; expression-pedal target)
+  Knob.swift           rotary Knob / KnobGrid / FootswitchToggle controls
+  BluetoothMIDI.swift  CoreAudioKit BLE-MIDI pairing sheet
+  ContentView.swift    main UI: header, presetBar, chain strip + tile/editor, OUTPUT block (+ per-preset MIDI out), all sheets
   LiveView.swift       full-screen stage view
-  MIDIManager.swift    CoreMIDI in, CC/PC mapping + learn
+  MIDIManager.swift    CoreMIDI in + out: CC/note/PC mapping, learn, clock in/out, per-preset sends, CC feedback
   Preset.swift         Preset struct + tolerant Codable decoder + PresetStore (Documents/presets.json)
-  T3K.swift            TONE3000 client (OAuth PKCE) + browser (Target .amp/.pedal/.cab)
-  Engine/NAMModel.*    Obj-C++ bridge to NeuralAmpModelerCore
+  T3K.swift            TONE3000 client (OAuth PKCE + refresh) + browser tabs/sort/favorites/detail (Target .amp/.pedal/.cab)
+  Engine/NAMModel.*    Obj-C++ bridge to NeuralAmpModelerCore (+ loudness / input / output level metadata)
 tools/
   deploy.sh            build + install + launch (device-aware, dodges the decoy .apps)
-  *_test.swift         headless DSP verifiers (reverb_algo, od, aa, stereo, ir_reverb, wah, tempo…)
+  blocks_test.swift    compiles the REAL block sources + stub NAMModel; numeric checks (gate/comp/delay/chorus/flanger/amp/wah)
+  *_test.swift         older headless verifiers on MIRROR copies (reverb_algo, od, aa, stereo, ir_reverb, wah, tempo…)
 docs/fx-roadmap.md     the FX research (OD recipes, reverb algorithms, legal/naming)
 keys.md                GITIGNORED — TONE3000 token; re-auth in-app on a new machine
 ```

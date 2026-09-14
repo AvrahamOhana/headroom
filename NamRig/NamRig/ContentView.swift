@@ -5,16 +5,15 @@
 //
 
 import SwiftUI
-import UIKit
 import UniformTypeIdentifiers
 
 enum ChainBlock: String, CaseIterable, Identifiable {
-    case gate, comp, boost, drive, stomp, pedal, amp, cab, eq, chorus, flanger, tremolo, delay, reverb, irReverb
+    case gate, comp, boost, drive, stomp, wah, pedal, amp, cab, eq, chorus, flanger, tremolo, delay, reverb, irReverb
     var id: String { rawValue }
 
     var kind: BlockKind {
         switch self {
-        case .gate: return .gate; case .comp: return .comp; case .boost: return .boost; case .drive: return .drive; case .stomp: return .stomp
+        case .gate: return .gate; case .comp: return .comp; case .boost: return .boost; case .drive: return .drive; case .stomp: return .stomp; case .wah: return .wah
         case .pedal: return .pedal; case .amp: return .amp; case .cab: return .cab; case .eq: return .eq
         case .chorus: return .chorus; case .flanger: return .flanger; case .tremolo: return .tremolo
         case .delay: return .delay; case .reverb: return .reverb; case .irReverb: return .irReverb
@@ -22,7 +21,7 @@ enum ChainBlock: String, CaseIterable, Identifiable {
     }
     init?(_ k: BlockKind) {
         switch k {
-        case .gate: self = .gate; case .comp: self = .comp; case .boost: self = .boost; case .drive: self = .drive; case .stomp: self = .stomp
+        case .gate: self = .gate; case .comp: self = .comp; case .boost: self = .boost; case .drive: self = .drive; case .stomp: self = .stomp; case .wah: self = .wah
         case .pedal: self = .pedal; case .amp: self = .amp; case .cab: self = .cab; case .eq: self = .eq
         case .chorus: self = .chorus; case .flanger: self = .flanger; case .tremolo: self = .tremolo
         case .delay: self = .delay; case .reverb: self = .reverb; case .irReverb: self = .irReverb
@@ -31,28 +30,28 @@ enum ChainBlock: String, CaseIterable, Identifiable {
 
     var short: String {
         switch self {
-        case .gate: return "GATE"; case .comp: return "COMP"; case .boost: return "BST"; case .drive: return "DRV"; case .stomp: return "STMP"
+        case .gate: return "GATE"; case .comp: return "COMP"; case .boost: return "BST"; case .drive: return "DRV"; case .stomp: return "STMP"; case .wah: return "WAH"
         case .pedal: return "PED"; case .amp: return "AMP"; case .cab: return "CAB"; case .eq: return "EQ"; case .chorus: return "CHO"; case .flanger: return "FLG"
         case .tremolo: return "TRM"; case .delay: return "DLY"; case .reverb: return "RVB"; case .irReverb: return "IRV"
         }
     }
     var full: String {
         switch self {
-        case .gate: return "Noise Gate"; case .comp: return "Compressor"; case .boost: return "Clean Boost"; case .drive: return "Drive"; case .stomp: return "Stompbox"
+        case .gate: return "Noise Gate"; case .comp: return "Compressor"; case .boost: return "Clean Boost"; case .drive: return "Drive"; case .stomp: return "Stompbox"; case .wah: return "Wah"
         case .pedal: return "Pedal"; case .amp: return "Amp"; case .cab: return "Cab"; case .eq: return "EQ"; case .chorus: return "Chorus"; case .flanger: return "Flanger"
         case .tremolo: return "Tremolo"; case .delay: return "Delay"; case .reverb: return "Reverb"; case .irReverb: return "IR Reverb"
         }
     }
     var icon: String {
         switch self {
-        case .gate: return "waveform.path.ecg"; case .comp: return "dial.medium"; case .boost: return "bolt.fill"; case .drive: return "flame.fill"; case .stomp: return "flame.circle.fill"
+        case .gate: return "waveform.path.ecg"; case .comp: return "dial.medium"; case .boost: return "bolt.fill"; case .drive: return "flame.fill"; case .stomp: return "flame.circle.fill"; case .wah: return "dial.min.fill"
         case .pedal: return "dial.low.fill"; case .amp: return "amplifier"; case .cab: return "hifispeaker.fill"; case .eq: return "slider.vertical.3"; case .chorus: return "water.waves"; case .flanger: return "wind"
         case .tremolo: return "metronome"; case .delay: return "timer"; case .reverb: return "drop.fill"; case .irReverb: return "square.stack.3d.down.right.fill"
         }
     }
     var color: Color {
         switch self {
-        case .gate: return .teal; case .comp: return .blue; case .boost: return .yellow; case .drive: return .orange; case .stomp: return Color(red: 0.85, green: 0.3, blue: 0.1)
+        case .gate: return .teal; case .comp: return .blue; case .boost: return .yellow; case .drive: return .orange; case .stomp: return Color(red: 0.85, green: 0.3, blue: 0.1); case .wah: return Color(red: 0.55, green: 0.35, blue: 0.9)
         case .pedal: return .brown; case .amp: return .red; case .cab: return Color(red: 0.62, green: 0.42, blue: 0.24); case .eq: return .green; case .chorus: return .mint; case .flanger: return .indigo
         case .tremolo: return .pink; case .delay: return .purple; case .reverb: return .cyan; case .irReverb: return .cyan
         }
@@ -77,6 +76,7 @@ struct ContentView: View {
     @State private var showReorder = false
     @State private var showLive = false
     @State private var showMIDI = false
+    @State private var showBLE = false
     @State private var showPresets = false
     @State private var renameIdx: Int? = nil
     @State private var renameText = ""
@@ -105,6 +105,8 @@ struct ContentView: View {
             if phase == .active { if audio.state == .stopped { audio.start() } }
             else if phase == .background { audio.stop() }
         }
+        .onChange(of: audio.tunerRequested) { _, on in showTuner = on }
+        .onChange(of: showTuner) { _, on in if !on { audio.tunerRequested = false } }
         .alert("Save preset", isPresented: $showSave) {
             TextField("Name", text: $newName)
             Button("Save") { audio.saveCurrent(as: newName); newName = "" }
@@ -118,7 +120,7 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) { settingsSheet }
         .sheet(isPresented: $showReorder) { reorderSheet }
         .sheet(isPresented: $showMIDI) { midiSheet }
-        .fullScreenCover(isPresented: $showLive) {
+        .fullScreen(isPresented: $showLive) {
             LiveView(audio: audio, onExit: { showLive = false }, onTuner: { showLive = false; showTuner = true })
                 .preferredColorScheme(uiAppearance == 1 ? .light : uiAppearance == 2 ? .dark : nil)
         }
@@ -147,12 +149,14 @@ struct ContentView: View {
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(.tint.opacity(0.18), in: Capsule())
             }.buttonStyle(.plain)
-            Menu {
-                Button { showTuner = true } label: { Label("Tuner", systemImage: "tuningfork") }
-                Button { showMIDI = true } label: { Label("MIDI", systemImage: "pianokeys") }
-                Divider()
-                Button { showSettings = true } label: { Label("Settings", systemImage: "slider.horizontal.3") }
-            } label: { Image(systemName: "gearshape").font(.title3) }
+            Button { showTuner = true } label: { Image(systemName: "tuningfork").font(.title3) }.buttonStyle(.plain)
+            Button { showMIDI = true } label: {
+                Image(systemName: "pianokeys").font(.title3)
+                    .overlay(alignment: .topTrailing) {
+                        if midi.lastActivity > 0 { Circle().fill(.green).frame(width: 6, height: 6).offset(x: 3, y: -3) }
+                    }
+            }.buttonStyle(.plain)
+            Button { showSettings = true } label: { Image(systemName: "gearshape").font(.title3) }.buttonStyle(.plain)
             Button(action: audio.toggle) {
                 Image(systemName: isRunning ? "power.circle.fill" : "power.circle")
                     .font(.title2).foregroundStyle(isRunning ? .green : .secondary)
@@ -296,37 +300,67 @@ struct ContentView: View {
     }
 
     @ViewBuilder private func controls(_ b: ChainBlock) -> some View {
+        let c = b.color
         switch b {
         case .gate:
-            sliderRow("Threshold", value: $audio.gateThresholdDb, range: -70 ... -10)
+            KnobGrid {
+                Knob(label: "Threshold", value: $audio.gateThresholdDb, range: -70 ... -10, unit: "dB", color: c, defaultValue: -40)
+                Knob(label: "Release", value: $audio.gateReleaseMs, range: 10...500, unit: "ms", color: c, defaultValue: 80)
+                Knob(label: "Range", value: $audio.gateRangeDb, range: -90 ... -10, unit: "dB", color: c, defaultValue: -80)
+            }
+            Text("Range sets how far the gate closes: −90 dB = hard mute, −20 dB = gentle expander (hiss down, sustain intact).")
+                .font(.caption2).foregroundStyle(.secondary)
         case .comp:
-            sliderRow("Threshold", value: $audio.compThresholdDb, range: -48...0)
-            sliderRow("Ratio", value: $audio.compRatio, range: 1...20, unit: ":1")
-            sliderRow("Attack", value: $audio.compAttackMs, range: 1...100, unit: "ms")
-            sliderRow("Release", value: $audio.compReleaseMs, range: 20...500, unit: "ms")
-            sliderRow("Makeup", value: $audio.compMakeupDb, range: 0...24)
+            KnobGrid {
+                Knob(label: "Thresh", value: $audio.compThresholdDb, range: -48...0, unit: "dB", color: c, defaultValue: -18)
+                Knob(label: "Ratio", value: $audio.compRatio, range: 1...20, unit: ":1", decimals: 1, color: c, defaultValue: 4)
+                Knob(label: "Attack", value: $audio.compAttackMs, range: 1...100, unit: "ms", color: c, defaultValue: 10)
+                Knob(label: "Release", value: $audio.compReleaseMs, range: 20...500, unit: "ms", color: c, defaultValue: 120)
+                Knob(label: "Makeup", value: $audio.compMakeupDb, range: 0...24, unit: "dB", color: c, defaultValue: 0)
+            }
+            TimelineView(.periodic(from: .now, by: 0.08)) { _ in grMeter(audio.compGainReductionDb) }
         case .boost:
-            sliderRow("Boost", value: $audio.boostDb, range: 0...18)
+            KnobGrid { Knob(label: "Boost", value: $audio.boostDb, range: 0...18, unit: "dB", color: c, defaultValue: 6) }
         case .drive:
             Picker("Mode", selection: $audio.driveMode) { Text("Soft").tag(0); Text("Hard").tag(1); Text("Fuzz").tag(2) }
                 .pickerStyle(.segmented)
-            sliderRow("Drive", value: $audio.driveAmount, range: 1...50, unit: "x")
-            sliderRow("Tone", value: $audio.driveToneHz, range: 1000...8000, unit: "Hz")
-            sliderRow("Level", value: $audio.driveLevelDb, range: -24...6)
+            KnobGrid {
+                Knob(label: "Drive", value: $audio.driveAmount, range: 1...50, unit: "x", color: c, defaultValue: 4)
+                Knob(label: "Tone", value: $audio.driveToneHz, range: 1000...8000, unit: "Hz", color: c, defaultValue: 4000)
+                Knob(label: "Level", value: $audio.driveLevelDb, range: -24...6, unit: "dB", color: c, defaultValue: 0)
+            }
         case .stomp:
             Picker("Pedal", selection: $audio.stompModel) {
                 ForEach(0..<audio.stompModelCount, id: \.self) { i in Text(audio.stompModelName(i)).tag(i) }
             }
             .pickerStyle(.menu)
-            sliderRow("Drive", value: $audio.stompDrive, range: 0...1)
-            sliderRow("Tone", value: $audio.stompTone, range: 0...1)
-            sliderRow("Level", value: $audio.stompLevel, range: 0...1)
+            KnobGrid {
+                Knob(label: "Drive", value: $audio.stompDrive, range: 0...1, unit: "", decimals: 2, color: c, defaultValue: 0.5)
+                Knob(label: "Tone", value: $audio.stompTone, range: 0...1, unit: "", decimals: 2, color: c, defaultValue: 0.5)
+                Knob(label: "Level", value: $audio.stompLevel, range: 0...1, unit: "", decimals: 2, color: c, defaultValue: 0.8)
+            }
             Text(CircuitDriveBlock.disclaimer).font(.caption2).foregroundStyle(.secondary).padding(.top, 2)
+        case .wah:
+            Picker("Mode", selection: $audio.wahAuto) { Text("Pedal").tag(false); Text("Auto").tag(true) }.pickerStyle(.segmented)
+            KnobGrid {
+                if audio.wahAuto {
+                    Knob(label: "Sense", value: $audio.wahSense, range: 0...100, unit: "%", color: c, defaultValue: 50)
+                } else {
+                    Knob(label: "Pedal", value: $audio.wahPosition, range: 0...1, unit: "", decimals: 2, color: c, defaultValue: 0.5)
+                }
+                Knob(label: "Mix", value: $audio.wahMix, range: 0...100, unit: "%", color: c, defaultValue: 92)
+            }
+            if !audio.wahAuto {
+                Slider(value: $audio.wahPosition, in: 0...1) { Text("Pedal") } minimumValueLabel: { Text("heel").font(.caption2) } maximumValueLabel: { Text("toe").font(.caption2) }
+                    .tint(c)
+                Text("Expression pedal: MIDI → Add mapping → Parameter → \"Wah (expression)\", then Learn.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
         case .amp:
-            if let art = audio.selectedArtworkPath, let ui = UIImage(contentsOfFile: art) {
+            if let art = audio.selectedArtworkPath, let img = Image(file: art) {
                 RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.25))
                     .frame(maxWidth: .infinity).frame(height: 150)
-                    .overlay { Image(uiImage: ui).resizable().interpolation(.high).scaledToFit().padding(8) }   // whole image
+                    .overlay { img.resizable().interpolation(.high).scaledToFit().padding(8) }   // whole image
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.12)))
                     .allowsHitTesting(false)   // decorative — never intercept the enable toggle
@@ -352,15 +386,17 @@ struct ContentView: View {
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             }
             Text(audio.modelStatus).font(.caption).foregroundStyle(.secondary)
-            sliderRow("Drive", value: $audio.inputDriveDb, range: 0...24)
-            TimelineView(.periodic(from: .now, by: 0.08)) { _ in
-                VStack(spacing: 8) { meter("In", audio.inPeakDb); meter("Out", audio.outPeakDb) }
+            HStack(alignment: .top, spacing: 14) {
+                Knob(label: "Drive", value: $audio.inputDriveDb, range: 0...24, unit: "dB", color: c, defaultValue: 0, size: 72)
+                TimelineView(.periodic(from: .now, by: 0.08)) { _ in
+                    VStack(spacing: 8) { meter("In", audio.inPeakDb); meter("Out", audio.outPeakDb) }
+                }
             }
         case .pedal:
-            if let art = audio.selectedPedalArtworkPath, let ui = UIImage(contentsOfFile: art) {
+            if let art = audio.selectedPedalArtworkPath, let img = Image(file: art) {
                 RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.25))
                     .frame(maxWidth: .infinity).frame(height: 140)
-                    .overlay { Image(uiImage: ui).resizable().interpolation(.high).scaledToFit().padding(8) }   // whole image
+                    .overlay { img.resizable().interpolation(.high).scaledToFit().padding(8) }   // whole image
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.12)))
                     .allowsHitTesting(false)
@@ -385,24 +421,34 @@ struct ContentView: View {
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             }
             Text(audio.pedalStatus).font(.caption).foregroundStyle(.secondary)
-            sliderRow("Drive", value: $audio.pedalDriveDb, range: 0...24)
-            sliderRow("Level", value: $audio.pedalLevelDb, range: -24...12)
+            KnobGrid {
+                Knob(label: "Drive", value: $audio.pedalDriveDb, range: 0...24, unit: "dB", color: c, defaultValue: 0)
+                Knob(label: "Level", value: $audio.pedalLevelDb, range: -24...12, unit: "dB", color: c, defaultValue: 0)
+            }
         case .eq:
-            sliderRow("Bass", value: $audio.bassDb, range: -12...12)
-            sliderRow("Mid", value: $audio.midDb, range: -12...12)
-            sliderRow("Treble", value: $audio.trebleDb, range: -12...12)
+            KnobGrid {
+                Knob(label: "Bass", value: $audio.bassDb, range: -12...12, unit: "dB", color: c, defaultValue: 0, bipolar: true)
+                Knob(label: "Mid", value: $audio.midDb, range: -12...12, unit: "dB", color: c, defaultValue: 0, bipolar: true)
+                Knob(label: "Treble", value: $audio.trebleDb, range: -12...12, unit: "dB", color: c, defaultValue: 0, bipolar: true)
+            }
         case .chorus:
-            sliderRow("Rate", value: $audio.chorusRateHz, range: 0.1...8, unit: "Hz")
-            sliderRow("Depth", value: $audio.chorusDepthMs, range: 1...15, unit: "ms")
-            sliderRow("Mix", value: $audio.chorusMixPct, range: 0...100, unit: "%")
+            KnobGrid {
+                Knob(label: "Rate", value: $audio.chorusRateHz, range: 0.1...8, unit: "Hz", decimals: 2, color: c, defaultValue: 0.8)
+                Knob(label: "Depth", value: $audio.chorusDepthMs, range: 1...15, unit: "ms", decimals: 1, color: c, defaultValue: 6)
+                Knob(label: "Mix", value: $audio.chorusMixPct, range: 0...100, unit: "%", color: c, defaultValue: 40)
+            }
         case .flanger:
-            sliderRow("Rate", value: $audio.flangerRateHz, range: 0.05...5, unit: "Hz")
-            sliderRow("Depth", value: $audio.flangerDepthMs, range: 0.5...8, unit: "ms")
-            sliderRow("Feedback", value: $audio.flangerFeedbackPct, range: 0...95, unit: "%")
-            sliderRow("Mix", value: $audio.flangerMixPct, range: 0...100, unit: "%")
+            KnobGrid {
+                Knob(label: "Rate", value: $audio.flangerRateHz, range: 0.05...5, unit: "Hz", decimals: 2, color: c, defaultValue: 0.4)
+                Knob(label: "Depth", value: $audio.flangerDepthMs, range: 0.5...8, unit: "ms", decimals: 1, color: c, defaultValue: 2)
+                Knob(label: "Feedback", value: $audio.flangerFeedbackPct, range: 0...95, unit: "%", color: c, defaultValue: 50)
+                Knob(label: "Mix", value: $audio.flangerMixPct, range: 0...100, unit: "%", color: c, defaultValue: 50)
+            }
         case .tremolo:
-            sliderRow("Rate", value: $audio.tremoloRateHz, range: 0.5...14, unit: "Hz")
-            sliderRow("Depth", value: $audio.tremoloDepthPct, range: 0...100, unit: "%")
+            KnobGrid {
+                Knob(label: "Rate", value: $audio.tremoloRateHz, range: 0.5...14, unit: "Hz", decimals: 1, color: c, defaultValue: 5)
+                Knob(label: "Depth", value: $audio.tremoloDepthPct, range: 0...100, unit: "%", color: c, defaultValue: 50)
+            }
         case .cab:
             HStack(spacing: 8) {
                 Image(systemName: "hifispeaker.fill").foregroundStyle(.secondary)
@@ -428,18 +474,22 @@ struct ContentView: View {
                 Picker("Division", selection: $audio.delayDivision) {
                     ForEach(TempoClock.NoteDivision.allCases) { d in Text(d.displayName).tag(d) }
                 }.pickerStyle(.segmented)
-            } else {
-                sliderRow("Time", value: $audio.delayTimeMs, range: 50...1000, unit: "ms")
             }
-            sliderRow("Feedback", value: $audio.delayFeedbackPct, range: 0...90, unit: "%")
-            sliderRow("Mix", value: $audio.delayMixPct, range: 0...100, unit: "%")
+            KnobGrid {
+                if !audio.delaySync { Knob(label: "Time", value: $audio.delayTimeMs, range: 50...1000, unit: "ms", color: c, defaultValue: 350) }
+                Knob(label: "Feedback", value: $audio.delayFeedbackPct, range: 0...90, unit: "%", color: c, defaultValue: 35)
+                Knob(label: "Tone", value: $audio.delayTonePct, range: 0...100, unit: "%", color: c, defaultValue: 60)
+                Knob(label: "Mix", value: $audio.delayMixPct, range: 0...100, unit: "%", color: c, defaultValue: 30)
+            }
         case .reverb:
             Picker("Type", selection: Binding(get: { audio.reverbType }, set: { audio.selectReverbType($0) })) {
                 Text("Room").tag(0); Text("Plate").tag(1); Text("Spring").tag(2); Text("Hall").tag(3)
             }.pickerStyle(.segmented)
-            sliderRow("Decay", value: $audio.reverbDecayPct, range: 0...100, unit: "%")
-            sliderRow("Damping", value: $audio.reverbDampPct, range: 0...100, unit: "%")
-            sliderRow("Mix", value: $audio.reverbMixPct, range: 0...100, unit: "%")
+            KnobGrid {
+                Knob(label: "Decay", value: $audio.reverbDecayPct, range: 0...100, unit: "%", color: c, defaultValue: 70)
+                Knob(label: "Damping", value: $audio.reverbDampPct, range: 0...100, unit: "%", color: c, defaultValue: 30)
+                Knob(label: "Mix", value: $audio.reverbMixPct, range: 0...100, unit: "%", color: c, defaultValue: 25)
+            }
         case .irReverb:
             HStack(spacing: 8) {
                 Image(systemName: "square.stack.3d.down.right.fill").foregroundStyle(.secondary)
@@ -452,26 +502,28 @@ struct ContentView: View {
             }
             .padding(.vertical, 7).padding(.horizontal, 10)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-            sliderRow("Predelay", value: $audio.irReverbPredelayMs, range: 0...200, unit: "ms")
-            sliderRow("Mix", value: $audio.irReverbMixPct, range: 0...100, unit: "%")
+            KnobGrid {
+                Knob(label: "Predelay", value: $audio.irReverbPredelayMs, range: 0...200, unit: "ms", color: c, defaultValue: 0)
+                Knob(label: "Mix", value: $audio.irReverbMixPct, range: 0...100, unit: "%", color: c, defaultValue: 35)
+            }
         }
     }
 
-    private func isOn(_ b: ChainBlock) -> Bool {
-        switch b {
-        case .gate: return audio.gateEnabled; case .comp: return audio.compEnabled; case .boost: return audio.boostEnabled
-        case .drive: return audio.driveEnabled; case .stomp: return audio.stompEnabled; case .pedal: return audio.pedalEnabled; case .amp: return audio.ampEnabled; case .cab: return audio.cabEnabled; case .eq: return audio.eqEnabled
-        case .chorus: return audio.chorusEnabled; case .flanger: return audio.flangerEnabled; case .tremolo: return audio.tremoloEnabled
-        case .delay: return audio.delayEnabled; case .reverb: return audio.reverbEnabled; case .irReverb: return audio.irReverbEnabled
+    private func grMeter(_ gr: Float) -> some View {
+        let norm = max(0, min(1, Double(-gr) / 24))
+        return HStack(spacing: 8) {
+            Text("GR").font(.caption2.bold()).foregroundStyle(.secondary)
+            ZStack(alignment: .trailing) {
+                Capsule().fill(.black.opacity(0.25))
+                Rectangle().fill(Color.orange).scaleEffect(x: CGFloat(norm), anchor: .trailing)
+            }.frame(height: 6).clipShape(Capsule())
+            Text(String(format: "%.1f dB", gr)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 52, alignment: .trailing)
         }
     }
+
+    private func isOn(_ b: ChainBlock) -> Bool { audio.isBlockEnabled(b.kind) }
     private func enabled(_ b: ChainBlock) -> Binding<Bool> {
-        switch b {
-        case .gate: return $audio.gateEnabled; case .comp: return $audio.compEnabled; case .boost: return $audio.boostEnabled
-        case .drive: return $audio.driveEnabled; case .stomp: return $audio.stompEnabled; case .pedal: return $audio.pedalEnabled; case .amp: return $audio.ampEnabled; case .cab: return $audio.cabEnabled; case .eq: return $audio.eqEnabled
-        case .chorus: return $audio.chorusEnabled; case .flanger: return $audio.flangerEnabled; case .tremolo: return $audio.tremoloEnabled
-        case .delay: return $audio.delayEnabled; case .reverb: return $audio.reverbEnabled; case .irReverb: return $audio.irReverbEnabled
-        }
+        Binding(get: { audio.isBlockEnabled(b.kind) }, set: { audio.setBlockEnabled(b.kind, $0) })
     }
 
     private var reorderSheet: some View {
@@ -494,9 +546,9 @@ struct ContentView: View {
                     Text("Drag to reorder the chain. Signal flows top → bottom (IN → OUT).")
                 }
             }
-            .environment(\.editMode, .constant(.active))
+            .alwaysEditing()
             .navigationTitle("Chain Order")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showReorder = false } } }
         }
     }
@@ -524,18 +576,25 @@ struct ContentView: View {
                 Spacer()
                 Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(.tertiary)
             }
-            sliderRow("Master", value: $audio.outputLevelDb, range: -40...12)
+            HStack(alignment: .top, spacing: 14) {
+                Knob(label: "Master", value: $audio.outputLevelDb, range: -40...12, unit: "dB", color: .cyan, defaultValue: -6, size: 72)
+                TimelineView(.periodic(from: .now, by: 0.08)) { _ in
+                    VStack(spacing: 8) { meter("Out", audio.outPeakDb) }
+                }
+            }
             Divider().overlay(.secondary.opacity(0.2))
             Toggle(isOn: $audio.stereoOn) {
                 Label("Stereo Width", systemImage: "speaker.wave.3.fill").font(.subheadline.bold())
             }
             .tint(.cyan)
             if audio.stereoOn {
-                sliderRow("Width", value: $audio.stereoWidth, range: 0...100, unit: "%")
-                sliderRow("Ping-Pong", value: $audio.stereoPingMix, range: 0...100, unit: "%")
-                sliderRow("Echo Time", value: $audio.stereoPingTime, range: 50...700, unit: "ms")
-                sliderRow("Feedback", value: $audio.stereoPingFb, range: 0...85, unit: "%")
-                sliderRow("Ambience", value: $audio.stereoSpace, range: 0...100, unit: "%")
+                KnobGrid {
+                    Knob(label: "Width", value: $audio.stereoWidth, range: 0...100, unit: "%", color: .cyan, defaultValue: 100)
+                    Knob(label: "Ping-Pong", value: $audio.stereoPingMix, range: 0...100, unit: "%", color: .cyan, defaultValue: 25)
+                    Knob(label: "Echo", value: $audio.stereoPingTime, range: 50...700, unit: "ms", color: .cyan, defaultValue: 350)
+                    Knob(label: "Feedback", value: $audio.stereoPingFb, range: 0...85, unit: "%", color: .cyan, defaultValue: 30)
+                    Knob(label: "Ambience", value: $audio.stereoSpace, range: 0...100, unit: "%", color: .cyan, defaultValue: 18)
+                }
                 Text("Mono chain → wide stereo out. Needs headphones or stereo monitors to hear.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
@@ -554,6 +613,8 @@ struct ContentView: View {
                 Button { audio.clearLooper() } label: { Image(systemName: "trash") }.buttonStyle(.bordered).tint(.red)
             }
             sliderRow("Loop Level", value: $audio.loopLevel, range: 0...100, unit: "%")
+            Divider().overlay(.secondary.opacity(0.2))
+            midiOutSection
         }
         .padding().frame(maxWidth: .infinity)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
@@ -607,10 +668,10 @@ struct ContentView: View {
                 Spacer()
             }
             .navigationTitle("Tuner")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showTuner = false } } }
         }
-        .presentationDetents([.medium])
+        .sheetSize([.medium], mac: CGSize(width: 420, height: 320))
     }
 
     // MARK: - Settings sheet (metrics)
@@ -618,34 +679,65 @@ struct ContentView: View {
     private var midiSheet: some View {
         NavigationStack {
             Form {
-                Section("Sources") {
+                Section("Devices") {
                     if midi.sources.isEmpty {
-                        Label("No MIDI devices connected", systemImage: "pianokeys").foregroundStyle(.red)
+                        Label("No MIDI inputs connected", systemImage: "pianokeys").foregroundStyle(.secondary)
                     } else {
                         ForEach(midi.sources, id: \.self) { Label($0, systemImage: "pianokeys.inverse") }
                     }
+                    #if os(iOS)
+                    Button { showBLE = true } label: { Label("Bluetooth MIDI…", systemImage: "antenna.radiowaves.left.and.right") }
+                    #else
+                    Text("Bluetooth MIDI pedals: pair them in Audio MIDI Setup → Window → Show MIDI Studio → Bluetooth.").font(.caption).foregroundStyle(.secondary)
+                    #endif
                     HStack {
-                        Text("Messages received").font(.caption).foregroundStyle(.secondary)
+                        Text("Last received").font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Text("\(midi.lastActivity)").font(.caption.monospacedDigit()).foregroundStyle(midi.lastActivity > 0 ? .green : .secondary)
+                        Text(midi.lastMessage).font(.caption.monospacedDigit()).foregroundStyle(midi.lastActivity > 0 ? .green : .secondary)
                     }
-                    Text("Program Change selects preset 1–\(max(audio.presets.count, 1)). Move a control to test reception.").font(.caption).foregroundStyle(.secondary)
+                    if let bpm = midi.externalClockBpm {
+                        HStack { Text("External clock").font(.caption).foregroundStyle(.secondary); Spacer(); Text("\(Int(bpm.rounded())) BPM").font(.caption.monospacedDigit()) }
+                    }
                 }
-                Section("Channel") {
-                    Picker("MIDI channel", selection: Binding(get: { midi.channelFilter ?? 0 }, set: { midi.channelFilter = $0 == 0 ? nil : $0 })) {
+                Section("Input") {
+                    Picker("Listen on channel", selection: Binding(get: { midi.channelFilter ?? 0 }, set: { midi.channelFilter = $0 == 0 ? nil : $0 })) {
                         Text("Omni").tag(0)
                         ForEach(1...16, id: \.self) { Text("\($0)").tag($0) }
                     }
+                    Toggle("Bank Select (CC0/32) + PC", isOn: $midi.bankSelect)
+                    Toggle("Follow MIDI clock (tempo)", isOn: $midi.clockInSync)
+                    Text("Program Change selects preset 1–\(max(audio.presets.count, 1)).").font(.caption).foregroundStyle(.secondary)
                 }
-                Section("CC mappings") {
+                Section("Output") {
+                    if midi.destinations.isEmpty {
+                        Text("No hardware outputs. \"NamRig Out\" virtual port is always available to other apps.").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(midi.destinations, id: \.self) { Label($0, systemImage: "arrow.up.right.circle") }
+                    }
+                    Picker("Send on channel", selection: $midi.outChannel) { ForEach(1...16, id: \.self) { Text("\($0)").tag($0) } }
+                    Toggle("Program Change on preset load", isOn: $midi.sendPCOnPresetLoad)
+                    Toggle("CC feedback (knob → controller)", isOn: $midi.sendCCFeedback)
+                    Toggle("Send MIDI clock (tap tempo)", isOn: $midi.sendClock)
+                    HStack { Text("Last sent").font(.caption).foregroundStyle(.secondary); Spacer(); Text(midi.lastSent).font(.caption.monospacedDigit()) }
+                    Text("Per-preset messages to external gear are edited in the OUT block → MIDI Out.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Mappings") {
                     if midi.mappings.isEmpty {
-                        Text("No mappings yet. Add one, then move a knob/footswitch to learn it.").font(.caption).foregroundStyle(.secondary)
+                        Text("No mappings yet. Add one, then press a footswitch / move a pedal to learn it.").font(.caption).foregroundStyle(.secondary)
                     }
                     ForEach($midi.mappings) { $m in
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(m.target.label).font(.subheadline.weight(.semibold))
                             HStack {
-                                Stepper("CC \(m.cc)", value: $m.cc, in: 0...127).fixedSize()
+                                Text(m.target.label).font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text(m.source == .note ? "Note \(m.cc)" : "CC \(m.cc)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            }
+                            HStack {
+                                Stepper("", value: $m.cc, in: 0...127).labelsHidden()
+                                if m.target.isSwitch {
+                                    Picker("", selection: $m.momentary) { Text("Press").tag(true); Text("Latch").tag(false) }
+                                        .pickerStyle(.segmented).frame(width: 130)
+                                }
                                 Spacer()
                                 Button { midi.beginLearn(m.id) } label: { Label("Learn", systemImage: "dot.radiowaves.left.and.right") }
                                     .buttonStyle(.bordered).controlSize(.small)
@@ -657,19 +749,27 @@ struct ContentView: View {
                     Menu {
                         Button("Next preset") { midi.addMapping(.presetNext) }
                         Button("Previous preset") { midi.addMapping(.presetPrev) }
-                        Menu("Parameter") { ForEach(MIDIParam.allCases) { p in Button(p.label) { midi.addMapping(.param(p)) } } }
+                        Button("Looper REC / Play / Dub") { midi.addMapping(.looper) }
+                        Button("Looper stop") { midi.addMapping(.looperStop) }
+                        Button("Tap tempo") { midi.addMapping(.tapTempo) }
+                        Button("Mute") { midi.addMapping(.mute) }
+                        Button("Tuner") { midi.addMapping(.tuner) }
+                        Menu("Parameter / expression") { ForEach(MIDIParam.allCases) { p in Button(p.label) { midi.addMapping(.param(p)) } } }
                         Menu("Block on/off") { ForEach(BlockKind.allCases, id: \.self) { k in Button(k.rawValue) { midi.addMapping(.blockToggle(k.rawValue)) } } }
                     } label: { Label("Add mapping", systemImage: "plus") }
                 }
             }
             .navigationTitle("MIDI")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showMIDI = false } } }
+            #if os(iOS)
+            .sheet(isPresented: $showBLE) { BluetoothMIDIView().ignoresSafeArea() }
+            #endif
             .overlay {
                 if midi.learnMappingID != nil {
                     VStack(spacing: 12) {
                         ProgressView()
-                        Text("Move a control to learn its CC").font(.headline).multilineTextAlignment(.center)
+                        Text("Press a footswitch or move a pedal to learn it").font(.headline).multilineTextAlignment(.center)
                         Button("Cancel") { midi.cancelLearn() }.buttonStyle(.bordered)
                     }
                     .padding(28).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16)).padding()
@@ -678,23 +778,72 @@ struct ContentView: View {
         }
     }
 
+    /// Per-preset MIDI-out list (PC/CC sent to external gear when this preset loads).
+    private var midiOutSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "arrow.up.right.circle.fill").foregroundStyle(.orange)
+                Text("MIDI Out (this preset)").font(.subheadline.bold())
+                Spacer()
+                Menu {
+                    Button("Program Change") { var l = audio.currentMidiOut; l.append(MIDIOutMessage(kind: .programChange, channel: midi.outChannel)); audio.currentMidiOut = l }
+                    Button("Control Change") { var l = audio.currentMidiOut; l.append(MIDIOutMessage(kind: .controlChange, channel: midi.outChannel, number: 1, value: 127)); audio.currentMidiOut = l }
+                } label: { Image(systemName: "plus.circle.fill").font(.title3) }
+            }
+            if audio.currentMidiOut.isEmpty {
+                Text("Messages sent to external pedals/amps when this preset loads.").font(.caption2).foregroundStyle(.secondary)
+            }
+            ForEach(Array(audio.currentMidiOut.enumerated()), id: \.element.id) { i, m in
+                HStack(spacing: 8) {
+                    Picker("", selection: bindOut(i, \.kind)) { Text("PC").tag(MIDIOutMessage.Kind.programChange); Text("CC").tag(MIDIOutMessage.Kind.controlChange) }
+                        .pickerStyle(.segmented).frame(width: 90)
+                    Stepper("ch \(m.channel)", value: bindOut(i, \.channel), in: 1...16).fixedSize().font(.caption)
+                    Stepper("# \(m.number)", value: bindOut(i, \.number), in: 0...127).fixedSize().font(.caption)
+                    if m.kind == .controlChange { Stepper("= \(m.value)", value: bindOut(i, \.value), in: 0...127).fixedSize().font(.caption) }
+                    Spacer(minLength: 0)
+                    Button { midi.send(m) } label: { Image(systemName: "paperplane.fill") }.buttonStyle(.plain).foregroundStyle(.orange)
+                    Button { var l = audio.currentMidiOut; l.remove(at: i); audio.currentMidiOut = l } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+    private func bindOut<T>(_ i: Int, _ kp: WritableKeyPath<MIDIOutMessage, T>) -> Binding<T> {
+        Binding(get: { audio.currentMidiOut[i][keyPath: kp] },
+                set: { var l = audio.currentMidiOut; guard l.indices.contains(i) else { return }; l[i][keyPath: kp] = $0; audio.currentMidiOut = l })
+    }
+
     private var settingsSheet: some View {
         NavigationStack {
             Form {
                 Section("TONE3000") {
                     if let token = UserDefaults.standard.string(forKey: "t3k_token") {
                         Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                        Button { UIPasteboard.general.string = token } label: { Label("Copy access token", systemImage: "doc.on.doc") }
+                        Button { Pasteboard.copy(token) } label: { Label("Copy access token", systemImage: "doc.on.doc") }
                     } else {
                         Text("Not connected. Use Amp → Browse TONE3000 to log in.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Section("Audio") {
+                    #if os(macOS)
+                    Picker("Input device", selection: Binding(get: { audio.inputDeviceName ?? "" }, set: { audio.inputDeviceName = $0.isEmpty ? nil : $0 })) {
+                        Text("System default").tag("")
+                        ForEach(audio.inputDevices) { d in Text("\(d.name) (\(d.inputs) in)").tag(d.name) }
+                    }
+                    Picker("Output device", selection: Binding(get: { audio.outputDeviceName ?? "" }, set: { audio.outputDeviceName = $0.isEmpty ? nil : $0 })) {
+                        Text("System default").tag("")
+                        ForEach(audio.outputDevices) { d in Text("\(d.name) (\(d.outputs) out)").tag(d.name) }
+                    }
+                    Text("Lowest latency + no drift: use the SAME interface for in and out (or an Aggregate Device from Audio MIDI Setup).")
+                        .font(.caption).foregroundStyle(.secondary)
+                    #endif
                     row("Sample rate", audio.sampleRate > 0 ? "\(Int(audio.sampleRate)) Hz" : "—")
                     row("Input / Output", audio.inputSampleRate > 0 ? "\(Int(audio.inputSampleRate)) / \(Int(audio.outputSampleRate)) Hz" : "—")
                     row("I/O buffer", fmt(audio.ioBufferMs))
                     row("Round-trip (buffer)", fmt(audio.roundTripMs))
                     Picker("Latency / stability", selection: $audio.preferredBufferFrames) {
+                        #if os(macOS)
+                        Text("Lowest · 64").tag(64.0)
+                        #endif
                         Text("Low · 128").tag(128.0)
                         Text("Balanced · 256").tag(256.0)
                         Text("Safe · 512").tag(512.0)
@@ -730,10 +879,10 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSettings = false } } }
         }
-        .presentationDetents([.medium, .large])
+        .sheetSize([.medium, .large])
     }
 
     private var presetManageSheet: some View {
@@ -766,9 +915,11 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Setlist")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar {
+                #if os(iOS)
                 ToolbarItem(placement: .topBarLeading) { EditButton() }
+                #endif
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { showPresets = false } }
             }
             .alert("Rename preset", isPresented: Binding(get: { renameIdx != nil }, set: { if !$0 { renameIdx = nil } })) {
@@ -777,7 +928,7 @@ struct ContentView: View {
                 Button("Cancel", role: .cancel) { renameIdx = nil }
             }
         }
-        .presentationDetents([.large])
+        .sheetSize([.large])
     }
 
     private var manageSheet: some View {
@@ -801,10 +952,10 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Models")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showManage = false } } }
         }
-        .presentationDetents([.medium, .large])
+        .sheetSize([.medium, .large])
     }
 
     // MARK: - Pieces

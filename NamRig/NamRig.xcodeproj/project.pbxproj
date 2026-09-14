@@ -183,7 +183,9 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
-				SDKROOT = iphoneos;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 			};
@@ -240,7 +242,9 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
-				SDKROOT = iphoneos;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -267,6 +271,7 @@
 					"$(PROJECT_DIR)/../ThirdParty/NeuralAmpModelerCore/Dependencies/nlohmann",
 				);
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "NamRig uses your audio interface to process your guitar in real time.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "NamRig connects to Bluetooth MIDI foot controllers and expression pedals.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIBackgroundModes = audio;
@@ -288,6 +293,16 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "NamRig/NamRig-macOS.entitlements";
+				"ENABLE_HARDENED_RUNTIME[sdk=macosx*]" = YES;
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 			};
 			name = Debug;
 		};
@@ -312,6 +327,7 @@
 					"$(PROJECT_DIR)/../ThirdParty/NeuralAmpModelerCore/Dependencies/nlohmann",
 				);
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "NamRig uses your audio interface to process your guitar in real time.";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "NamRig connects to Bluetooth MIDI foot controllers and expression pedals.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIBackgroundModes = audio;
@@ -333,6 +349,16 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "NamRig/NamRig-macOS.entitlements";
+				"ENABLE_HARDENED_RUNTIME[sdk=macosx*]" = YES;
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 			};
 			name = Release;
 		};

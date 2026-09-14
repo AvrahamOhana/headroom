@@ -35,6 +35,12 @@ struct Preset: Codable, Identifiable {
     var pedalOn = false, pedalModel = "", pedalDrive = 0.0, pedalLevel = 0.0
     var cabIR = ""   // cab impulse-response filename (in Documents/IRs), "" = none
     var irReverbOn = false, irReverbMix = 35.0, irReverbPredelay = 0.0, irReverbIR = ""
+
+    // Gate v2 / tape delay / wah / tempo / per-preset MIDI out
+    var gateRel = 80.0, gateRange = -80.0
+    var delayTone = 60.0, delaySync = false, delayDiv: TempoClock.NoteDivision = .eighth, bpm = 0.0
+    var wahOn = false, wahPos = 0.5, wahAuto = false, wahSense = 50.0, wahMix = 92.0
+    var midiOut: [MIDIOutMessage] = []
 }
 
 // Tolerant decoder: every field falls back to its default when a key is absent, so ADDING new
@@ -66,6 +72,10 @@ extension Preset {
         pedalOn = g(.pedalOn, pedalOn); pedalModel = g(.pedalModel, pedalModel); pedalDrive = g(.pedalDrive, pedalDrive); pedalLevel = g(.pedalLevel, pedalLevel)
         cabIR = g(.cabIR, cabIR)
         irReverbOn = g(.irReverbOn, irReverbOn); irReverbMix = g(.irReverbMix, irReverbMix); irReverbPredelay = g(.irReverbPredelay, irReverbPredelay); irReverbIR = g(.irReverbIR, irReverbIR)
+        gateRel = g(.gateRel, gateRel); gateRange = g(.gateRange, gateRange)
+        delayTone = g(.delayTone, delayTone); delaySync = g(.delaySync, delaySync); delayDiv = g(.delayDiv, delayDiv); bpm = g(.bpm, bpm)
+        wahOn = g(.wahOn, wahOn); wahPos = g(.wahPos, wahPos); wahAuto = g(.wahAuto, wahAuto); wahSense = g(.wahSense, wahSense); wahMix = g(.wahMix, wahMix)
+        midiOut = g(.midiOut, midiOut)
     }
 }
 

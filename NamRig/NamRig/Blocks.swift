@@ -22,6 +22,7 @@ enum BlockKind: String, Sendable, CaseIterable {
     case boost = "Boost"
     case drive = "Drive"
     case stomp = "Stomp"
+    case wah = "Wah"
     case pedal = "Pedal"
     case amp = "Amp"
     case cab = "Cab"
@@ -52,55 +53,94 @@ nonisolated class AudioBlock: @unchecked Sendable {
     }
 }
 
-/// Noise gate — cuts the signal below a threshold (kills hiss between notes).
+/// One-pole parameter smoother (~`ms` to reach 1−1/e). Kills zipper noise on gain/mix knobs that
+/// the UI or MIDI moves abruptly. Value type; call `set` from the audio thread each sample.
+struct Smoother {
+    private(set) var value: Float
+    var target: Float
+    private var coef: Float = 0.999
+
+    init(_ v: Float = 0) { value = v; target = v }
+    mutating func prepare(sampleRate: Double, ms: Float = 5) { coef = expf(-1 / (ms / 1000 * Float(sampleRate))) }
+    mutating func snap() { value = target }
+    @inline(__always) mutating func next() -> Float { value += (target - value) * (1 - coef); return value }
+    /// True when the smoother is settled — lets a block take a cheaper constant-gain path.
+    var settled: Bool { abs(target - value) < 1e-6 }
+}
+
+/// Noise gate / downward expander — hysteresis (opens at `threshold`, closes 6 dB lower), a hold
+/// time so sustained notes never chatter, a `range` floor (how far the gate attenuates — a soft
+/// expander at −20 dB, a hard mute at −90 dB), and sample-rate-correct attack/release. The detector
+/// is high-passed so pick thumps / hum don't pump the gate.
 final class GateBlock: AudioBlock {
-    var threshold: Float = 0.02   // linear
-    private var env: Float = 0
-    private var g: Float = 0
+    var thresholdDb: Float = -40 { didSet { updateCoefs() } }
+    var releaseMs: Float = 80 { didSet { updateCoefs() } }
+    var rangeDb: Float = -80 { didSet { updateCoefs() } }
+    var holdMs: Float = 40 { didSet { updateCoefs() } }
+
+    private var sr: Float = 48000
+    private var openThr: Float = 0.01, closeThr: Float = 0.005, floorGain: Float = 0
+    private var detAtk: Float = 0.9, detRel: Float = 0.999
+    private var gAtk: Float = 0.9, gRel: Float = 0.999
+    private var holdSamples = 2000
+    private var detHP: Float = 0.99
+    private var env: Float = 0, g: Float = 0, hpX1: Float = 0, hpY1: Float = 0
+    private var holdCount = 0
+    private var open = false
 
     init() { super.init(kind: .gate) }
-    override func reset() { env = 0; g = 0 }
+    override func prepare(sampleRate: Double, maxBlock: Int) { sr = Float(sampleRate); updateCoefs() }
+    override func reset() { env = 0; g = 0; hpX1 = 0; hpY1 = 0; holdCount = 0; open = false }
+
+    private func updateCoefs() {
+        openThr = powf(10, thresholdDb / 20)
+        closeThr = powf(10, (thresholdDb - 6) / 20)
+        floorGain = powf(10, min(rangeDb, 0) / 20)
+        detAtk = expf(-1 / (0.0005 * sr))                       // 0.5 ms detector attack
+        detRel = expf(-1 / (0.020 * sr))                        // 20 ms detector release
+        gAtk = expf(-1 / (0.0015 * sr))                         // 1.5 ms gate open
+        gRel = expf(-1 / (max(5, releaseMs) / 1000 * sr))
+        holdSamples = Int(max(0, holdMs) / 1000 * sr)
+        detHP = expf(-2 * Float.pi * 120 / sr)                  // 120 Hz sidechain high-pass
+    }
 
     override func process(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
-        let thr = threshold
-        var e = env, gg = g
+        var e = env, gg = g, x1 = hpX1, y1 = hpY1, hc = holdCount, isOpen = open
+        let oT = openThr, cT = closeThr, fl = floorGain
+        let dA = detAtk, dR = detRel, gA = gAtk, gR = gRel, hp = detHP, hold = holdSamples
         for i in 0..<n {
-            let a = abs(s[i])
-            e = a > e ? a : e * 0.9995                              // peak envelope follower
-            let target: Float = e > thr ? 1 : 0
-            gg += (target - gg) * (target > gg ? 0.02 : 0.0006)    // fast open, slow close
-            s[i] *= gg
+            let x = s[i]
+            let y = x - x1 + hp * y1; x1 = x; y1 = y                       // sidechain HPF
+            let a = abs(y)
+            e = a > e ? dA * e + (1 - dA) * a : dR * e + (1 - dR) * a
+            if e > oT { isOpen = true; hc = hold }
+            else if isOpen && e < cT { if hc > 0 { hc -= 1 } else { isOpen = false } }
+            let target: Float = isOpen ? 1 : fl
+            gg = target > gg ? gA * gg + (1 - gA) * target : gR * gg + (1 - gR) * target
+            s[i] = x * gg
         }
-        env = e; g = gg
+        env = e; g = gg; hpX1 = x1; hpY1 = y1; holdCount = hc; open = isOpen
     }
 }
 
-/// Amp — drives the input into a NAM model, then DC-blocks + auto-levels the output.
+/// Amp — drives the input into a NAM model, then DC-blocks + level-matches the output.
+/// The input is rumble-filtered (30 Hz, 2nd order) before the network — high-gain captures
+/// amplify sub-bass thumps and mains hum into audible mud/noise otherwise. Both gains are smoothed.
 final class AmpBlock: AudioBlock {
-    // Model swap is RT-safe (mirrors `setIR`): the audio thread reads a raw pointer atomically and
-    // NEVER does ARC on it, so it can't race the main thread's release of an old model. `keepAlive`
-    // (main-thread-only) retains the current + recent models so none is freed while possibly in-flight.
+    // Model swap is RT-safe: the audio thread reads a raw pointer atomically and NEVER does ARC on
+    // it, so it can't race the main thread's release of an old model. `keepAlive` (main-thread-only)
+    // retains the current + recent models so none is freed while possibly in-flight.
     private let modelPtr = Atomic<UInt>(0)
     private var keepAlive: [NAMModel] = []
-    var inputGain: Float = 1     // drive into the amp
-    var makeupGain: Float = 1    // auto-level (from the model self-test)
+    var inputGain: Float = 1 { didSet { inSm.target = inputGain } }
+    var makeupGain: Float = 1 { didSet { mkSm.target = makeupGain } }
+    private var inSm = Smoother(1), mkSm = Smoother(1)
+    private var preHP = Biquad()
     private var dcX1: Float = 0
     private var dcY1: Float = 0
 
-    // Optional cab IR — post-amp convolution (vDSP overlap, RT-safe data-copy swap).
-    private let maxIR = 2048
-    private var maxBlk = 4096
-    private var irRev: UnsafeMutableBufferPointer<Float>?    // IR taps, reversed (so vDSP_conv = convolution)
-    private var irHist: UnsafeMutableBufferPointer<Float>?   // previous (irLen-1) input samples
-    private var irScratch: UnsafeMutableBufferPointer<Float>?
-    private var irLen = 0
-    private let irOn = Atomic<Bool>(false)
-
     override init(kind: BlockKind = .amp) { super.init(kind: kind) }
 
-    /// Swap the active model (main thread). Retains it in `keepAlive` (capped — a model from 8 user
-    /// swaps ago can't still be in-flight on the audio thread), then publishes a raw pointer for the
-    /// audio thread. Pass nil to detach.
     func setModel(_ m: NAMModel?) {
         if let m {
             keepAlive.append(m)
@@ -114,65 +154,32 @@ final class AmpBlock: AudioBlock {
     var hasModel: Bool { modelPtr.load(ordering: .relaxed) != 0 }
 
     override func prepare(sampleRate: Double, maxBlock: Int) {
-        maxBlk = max(maxBlock, 1)
-        if irRev == nil {
-            irRev = .allocate(capacity: maxIR); irRev!.initialize(repeating: 0)
-            irHist = .allocate(capacity: maxIR); irHist!.initialize(repeating: 0)
-            irScratch = .allocate(capacity: maxIR + maxBlk); irScratch!.initialize(repeating: 0)
-        }
+        inSm.prepare(sampleRate: sampleRate, ms: 8); mkSm.prepare(sampleRate: sampleRate, ms: 20)
+        inSm.snap(); mkSm.snap()
+        preHP.setHighpass(freq: 30, q: 0.707, sr: Float(sampleRate))
     }
 
-    override func reset() {
-        dcX1 = 0; dcY1 = 0
-        if let h = irHist?.baseAddress { for i in 0..<maxIR { h[i] = 0 } }
-    }
-
-    /// Load a cab IR (mono, already at engine SR, L1-normalized). Copies into the pre-allocated buffer.
-    func setIR(_ taps: [Float]) {
-        guard let rev = irRev?.baseAddress, let h = irHist?.baseAddress else { return }
-        let n = min(taps.count, maxIR)
-        irOn.store(false, ordering: .releasing)
-        guard n > 1 else { irLen = 0; return }
-        for i in 0..<n { rev[i] = taps[n - 1 - i] }
-        for i in 0..<maxIR { h[i] = 0 }
-        irLen = n
-        irOn.store(true, ordering: .releasing)
-    }
-    func clearIR() { irOn.store(false, ordering: .releasing) }
+    override func reset() { dcX1 = 0; dcY1 = 0; preHP.reset(); inSm.snap(); mkSm.snap() }
 
     override func process(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
-        let ig = inputGain
-        if ig != 1 { for i in 0..<n { s[i] *= ig } }
+        for i in 0..<n { s[i] = preHP.process(s[i]) * inSm.next() }
 
-        // Read the model pointer atomically and use it WITHOUT ARC (takeUnretainedValue does no
-        // retain/release) — the model stays alive via `keepAlive`, so no use-after-free on swap.
+        // Use the model pointer WITHOUT ARC — it stays alive via `keepAlive`, so no use-after-free on swap.
         let p = modelPtr.load(ordering: .acquiring)
         if p != 0, let raw = UnsafeRawPointer(bitPattern: p) {
             Unmanaged<NAMModel>.fromOpaque(raw).takeUnretainedValue().process(input: s, output: s, frames: Int32(n))
         }
 
-        // DC blocker (~19 Hz one-pole high-pass) + makeup, in one pass.
+        // DC blocker (~19 Hz one-pole high-pass) + smoothed makeup, in one pass.
         var x1 = dcX1, y1 = dcY1
-        let mk = makeupGain
         for i in 0..<n {
             let x = s[i].isFinite ? s[i] : 0
             let y = x - x1 + 0.9975 * y1
             x1 = x; y1 = y
-            s[i] = y * mk
+            s[i] = y * mkSm.next()
         }
         dcX1 = x1; dcY1 = y1
-
-        // Cab IR convolution: out[j] = Σ padded[j+p]·irRev[p], padded = [hist | block].
-        if irOn.load(ordering: .acquiring), irLen > 1, n <= maxBlk,
-           let rev = irRev?.baseAddress, let h = irHist?.baseAddress, let scr = irScratch?.baseAddress {
-            let need = irLen - 1
-            memcpy(scr, h, need * MemoryLayout<Float>.size)
-            memcpy(scr + need, s, n * MemoryLayout<Float>.size)
-            vDSP_conv(scr, 1, rev, 1, s, 1, vDSP_Length(n), vDSP_Length(irLen))
-            memcpy(h, scr + n, need * MemoryLayout<Float>.size)
-        }
     }
-    deinit { irRev?.deallocate(); irHist?.deallocate(); irScratch?.deallocate() }
 }
 
 /// Cab IR — standalone post-amp convolution block (extracted from AmpBlock so "Cab" is its own
@@ -513,19 +520,37 @@ final class EQBlock: AudioBlock {
     }
 }
 
-/// Feedback delay (single tap + feedback, wet/dry mix).
+/// 4-point Hermite interpolation — smooth fractional delay reads (no linear-interp HF dulling / zipper).
+@inline(__always) nonisolated func hermite(_ xm1: Float, _ x0: Float, _ x1: Float, _ x2: Float, _ t: Float) -> Float {
+    let c = (x1 - xm1) * 0.5
+    let v = x0 - x1
+    let w = c + v
+    let a = w + v + (x2 - x0) * 0.5
+    let b = w + a
+    return ((a * t - b) * t + c) * t + x0
+}
+
+/// Feedback delay — tape-style. Time changes glide (pitch-bend, never click), the feedback loop is
+/// darkened by `tone` (one-pole low-pass) + high-passed (no low-end build-up) + soft-saturated so
+/// repeats decay musically instead of piling up harshly. Hermite fractional read.
 final class DelayBlock: AudioBlock {
     private var buf: UnsafeMutableBufferPointer<Float>?
     private var cap = 0
     private var w = 0
-    var delaySamples = 16800   // ~350 ms @ 48k
+    var delaySamples = 16800 { didSet { timeSm.target = Float(delaySamples) } }
     var feedback: Float = 0.35
-    var mix: Float = 0.30
+    var mix: Float = 0.30 { didSet { mixSm.target = mix } }
+    var tone: Float = 0.6 { didSet { updateTone() } }   // 0 dark … 1 bright
+    private var timeSm = Smoother(16800), mixSm = Smoother(0.3)
+    private var sr: Float = 48000
+    private var lpCoef: Float = 0.5, hpCoef: Float = 0.99
+    private var lpState: Float = 0, hpX1: Float = 0, hpY1: Float = 0
 
     init() { super.init(kind: .delay) }
 
     override func prepare(sampleRate: Double, maxBlock: Int) {
-        let need = Int(sampleRate * 2) + 2     // up to 2 s
+        sr = Float(sampleRate)
+        let need = Int(sampleRate * 2) + 8     // up to 2 s
         if buf == nil || cap != need {
             buf?.deallocate()
             let b = UnsafeMutableBufferPointer<Float>.allocate(capacity: need)
@@ -533,27 +558,46 @@ final class DelayBlock: AudioBlock {
             buf = b; cap = need
         }
         w = 0
+        timeSm.prepare(sampleRate: sampleRate, ms: 60); timeSm.snap()
+        mixSm.prepare(sampleRate: sampleRate, ms: 10); mixSm.snap()
+        hpCoef = expf(-2 * Float.pi * 110 / sr)
+        updateTone()
+    }
+    private func updateTone() {
+        let fc = 1200 * powf(10, min(max(tone, 0), 1))        // 1.2 kHz … 12 kHz
+        lpCoef = 1 - expf(-2 * Float.pi * fc / sr)
     }
 
     override func reset() {
         if let base = buf?.baseAddress { for i in 0..<cap { base[i] = 0 } }
-        w = 0
+        w = 0; lpState = 0; hpX1 = 0; hpY1 = 0; timeSm.snap(); mixSm.snap()
     }
+    /// Jump to the new time immediately (preset change) instead of tape-gliding through the tail.
+    func snapTime() { timeSm.snap() }
 
     override func process(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
-        guard let base = buf?.baseAddress, cap > 1 else { return }
-        let d = min(max(1, delaySamples), cap - 1)
-        let fb = feedback, mx = mix
-        var wi = w
+        guard let base = buf?.baseAddress, cap > 8 else { return }
+        let fb = min(feedback, 1.1), lp = lpCoef, hp = hpCoef, maxD = Float(cap - 4)
+        var wi = w, ls = lpState, x1 = hpX1, y1 = hpY1
         for i in 0..<n {
-            let ri = (wi - d + cap) % cap
-            let echo = base[ri]
+            let d = min(max(2, timeSm.next()), maxD)
+            let rd = Float(wi) - d
+            var r0 = Int(rd.rounded(.down)); let t = rd - Float(r0)
+            r0 = ((r0 % cap) + cap) % cap
+            let rm1 = r0 == 0 ? cap - 1 : r0 - 1
+            let r1 = r0 + 1 == cap ? 0 : r0 + 1
+            let r2 = r1 + 1 == cap ? 0 : r1 + 1
+            let echo = hermite(base[rm1], base[r0], base[r1], base[r2], t)
+            // Feedback conditioning: low-pass (tone) → high-pass → soft clip.
+            ls += lp * (echo - ls)
+            let hpv = ls - x1 + hp * y1; x1 = ls; y1 = hpv
+            let fbv = tanhf(hpv * fb)
             let dry = s[i]
-            base[wi] = dry + echo * fb
-            s[i] = dry + echo * mx
+            base[wi] = dry + fbv
+            s[i] = dry + echo * mixSm.next()
             wi += 1; if wi >= cap { wi = 0 }
         }
-        w = wi
+        w = wi; lpState = ls; hpX1 = x1; hpY1 = y1
     }
 
     deinit { buf?.deallocate() }
@@ -808,38 +852,55 @@ final class ReverbIRBlock: AudioBlock {
     }
 }
 
-/// Feed-forward peak compressor (threshold / ratio / attack / release / makeup).
+/// Feed-forward compressor with a 6 dB soft knee. The gain computer runs in the log domain and
+/// the attack/release smooth the GAIN REDUCTION (not the raw peak), which is what makes studio
+/// compressors feel transparent on a guitar instead of pumping. `gainReductionDb` is exposed for metering.
 final class CompressorBlock: AudioBlock {
     var thresholdDb: Float = -18
     var ratio: Float = 4
-    var makeup: Float = 1
+    var makeup: Float = 1 { didSet { mkSm.target = makeup } }
+    private(set) var gainReductionDb: Float = 0
+    private let kneeDb: Float = 6
     private var attackCoef: Float = 0.998
     private var releaseCoef: Float = 0.9998
+    private var detRel: Float = 0.9995
     private var env: Float = 0
+    private var grDb: Float = 0
+    private var mkSm = Smoother(1)
     private var sr: Float = 48000
     private var atkMs: Float = 10, relMs: Float = 120
 
     init() { super.init(kind: .comp) }
-    override func prepare(sampleRate: Double, maxBlock: Int) { sr = Float(sampleRate); updateTimes() }
-    override func reset() { env = 0 }
+    override func prepare(sampleRate: Double, maxBlock: Int) {
+        sr = Float(sampleRate); updateTimes()
+        mkSm.prepare(sampleRate: sampleRate, ms: 10); mkSm.snap()
+    }
+    override func reset() { env = 0; grDb = 0; gainReductionDb = 0; mkSm.snap() }
 
     func setTimes(attackMs: Float, releaseMs: Float) { atkMs = attackMs; relMs = releaseMs; updateTimes() }
     private func updateTimes() {
         attackCoef = expf(-1 / max(1, atkMs / 1000 * sr))
         releaseCoef = expf(-1 / max(1, relMs / 1000 * sr))
+        detRel = expf(-1 / (0.008 * sr))     // 8 ms peak-hold so the gain computer sees the waveform's level, not its ripple
     }
 
     override func process(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
-        let thr = thresholdDb, slope = 1 - 1 / max(1, ratio), mk = makeup
-        var e = env
+        let thr = thresholdDb, r = max(1, ratio), k = kneeDb, halfK = kneeDb * 0.5
+        let aC = attackCoef, rC = releaseCoef, dR = detRel
+        var gr = grDb, e = env
         for i in 0..<n {
             let x = abs(s[i])
-            e = x > e ? attackCoef * (e - x) + x : releaseCoef * (e - x) + x   // peak follower
-            let envDb = 20 * log10f(e > 1e-9 ? e : 1e-9)
-            let gr = envDb > thr ? (thr - envDb) * slope : 0                    // gain reduction (dB)
-            s[i] *= powf(10, gr / 20) * mk
+            e = x > e ? x : e * dR                                                     // peak detector
+            let xDb = 20 * log10f(e > 1e-7 ? e : 1e-7)
+            let over = xDb - thr
+            let want: Float
+            if over <= -halfK { want = 0 }
+            else if over >= halfK { want = -over * (1 - 1 / r) }
+            else { let t = over + halfK; want = -(1 - 1 / r) * t * t / (2 * k) }      // soft knee
+            gr = want < gr ? aC * gr + (1 - aC) * want : rC * gr + (1 - rC) * want    // smooth the GR
+            s[i] *= powf(10, gr / 20) * mkSm.next()
         }
-        env = e
+        grDb = gr; env = e; gainReductionDb = gr
     }
 }
 
@@ -904,13 +965,16 @@ final class DriveBlock: AudioBlock {
     deinit { os2.freeBuffers(); os8.freeBuffers() }
 }
 
-/// Clean boost — transparent gain (no clipping/coloration). Goes anywhere in the chain.
+/// Clean boost — transparent, smoothed gain (no clipping/coloration). Goes anywhere in the chain.
 final class BoostBlock: AudioBlock {
-    var gain: Float = 1   // linear
+    var gain: Float = 1 { didSet { sm.target = gain } }
+    private var sm = Smoother(1)
     init() { super.init(kind: .boost) }
+    override func prepare(sampleRate: Double, maxBlock: Int) { sm.prepare(sampleRate: sampleRate, ms: 8); sm.snap() }
+    override func reset() { sm.snap() }
     override func process(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
-        let g = gain
-        if g != 1 { for i in 0..<n { s[i] *= g } }
+        if sm.settled { let g = sm.value; if g != 1 { for i in 0..<n { s[i] *= g } } }
+        else { for i in 0..<n { s[i] *= sm.next() } }
     }
 }
 
@@ -935,83 +999,107 @@ final class TremoloBlock: AudioBlock {
     }
 }
 
-/// Chorus — LFO-modulated short delay (~12 ms) mixed with dry. Fractional read for smooth pitch sweep.
+/// Hermite read at fractional delay `d` samples behind write index `wi` in a ring of `cap`.
+@inline(__always) nonisolated func ringReadHermite(_ base: UnsafeMutablePointer<Float>, _ cap: Int, _ wi: Int, _ d: Float) -> Float {
+    let rd = Float(wi) - d
+    var r0 = Int(rd.rounded(.down)); let t = rd - Float(r0)
+    r0 = ((r0 % cap) + cap) % cap
+    let rm1 = r0 == 0 ? cap - 1 : r0 - 1
+    let r1 = r0 + 1 == cap ? 0 : r0 + 1
+    let r2 = r1 + 1 == cap ? 0 : r1 + 1
+    return hermite(base[rm1], base[r0], base[r1], base[r2], t)
+}
+
+/// Chorus — two modulated voices (LFOs 180° apart, the second slightly shallower) summed with dry,
+/// Hermite fractional reads, and a 150 Hz high-pass on the wet path so the low end stays tight.
+/// Two anti-phase voices cancel the "pitch wobble" of a single-voice chorus → lush, not seasick.
 final class ChorusBlock: AudioBlock {
     var rateHz: Float = 0.8
     var depthMs: Float = 6
-    var mix: Float = 0.4
+    var mix: Float = 0.4 { didSet { mixSm.target = mix } }
+    private var mixSm = Smoother(0.4)
     private var sr: Float = 48000
     private var buf: UnsafeMutableBufferPointer<Float>?
     private var cap = 0, w = 0
     private var phase: Float = 0
-    private let baseMs: Float = 12
+    private var hpCoef: Float = 0.98, hpX1: Float = 0, hpY1: Float = 0
+    private let baseMs: Float = 14
     init() { super.init(kind: .chorus) }
     override func prepare(sampleRate: Double, maxBlock: Int) {
         sr = Float(sampleRate)
-        let need = Int(sampleRate * 0.06) + 4
+        let need = Int(sampleRate * 0.06) + 8
         if buf == nil || cap != need { buf?.deallocate(); let b = UnsafeMutableBufferPointer<Float>.allocate(capacity: need); b.initialize(repeating: 0); buf = b; cap = need }
         w = 0
+        hpCoef = expf(-2 * Float.pi * 150 / sr)
+        mixSm.prepare(sampleRate: sampleRate, ms: 10); mixSm.snap()
     }
-    override func reset() { if let p = buf?.baseAddress { for i in 0..<cap { p[i] = 0 } }; w = 0; phase = 0 }
+    override func reset() { if let p = buf?.baseAddress { for i in 0..<cap { p[i] = 0 } }; w = 0; phase = 0; hpX1 = 0; hpY1 = 0; mixSm.snap() }
     override func process(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
         guard let base = buf?.baseAddress, cap > 8 else { return }
-        let inc = 2 * Float.pi * rateHz / sr, mx = mix
+        let inc = 2 * Float.pi * rateHz / sr, hp = hpCoef
         let baseS = baseMs / 1000 * sr, depthS = depthMs / 1000 * sr
-        var ph = phase, wi = w
+        var ph = phase, wi = w, x1 = hpX1, y1 = hpY1
         for i in 0..<n {
             let dry = s[i]
             base[wi] = dry
-            let delayS = baseS + depthS * (0.5 * (1 - cosf(ph)))
-            let rd = Float(wi) - delayS
-            let r0 = Int(rd.rounded(.down)), frac = rd - rd.rounded(.down)
-            let i0 = ((r0 % cap) + cap) % cap, i1 = (i0 + 1) % cap
-            let wet = base[i0] * (1 - frac) + base[i1] * frac
-            s[i] = dry * (1 - mx) + wet * mx
+            let l1 = 0.5 * (1 - cosf(ph)), l2 = 0.5 * (1 + cosf(ph))
+            let v1 = ringReadHermite(base, cap, wi, baseS + depthS * l1)
+            let v2 = ringReadHermite(base, cap, wi, baseS * 0.8 + depthS * 0.7 * l2)
+            let wetRaw = (v1 + v2) * 0.5
+            let wet = wetRaw - x1 + hp * y1; x1 = wetRaw; y1 = wet
+            let mx = mixSm.next()
+            s[i] = dry * (1 - mx * 0.5) + wet * mx
             wi += 1; if wi >= cap { wi = 0 }
             ph += inc; if ph > 2 * Float.pi { ph -= 2 * Float.pi }
         }
-        phase = ph; w = wi
+        phase = ph; w = wi; hpX1 = x1; hpY1 = y1
     }
     deinit { buf?.deallocate() }
 }
 
-/// Flanger — very short LFO-modulated delay (~1 ms) with feedback → jet sweep.
+/// Flanger — short LFO-modulated delay with regeneration. Feedback is tanh-limited (never runs away
+/// at 95 %) and high-passed (no bass boom in the jet), Hermite fractional reads, triangle-ish LFO.
 final class FlangerBlock: AudioBlock {
     var rateHz: Float = 0.4
     var depthMs: Float = 2
     var feedback: Float = 0.5
-    var mix: Float = 0.5
+    var mix: Float = 0.5 { didSet { mixSm.target = mix } }
+    private var mixSm = Smoother(0.5)
     private var sr: Float = 48000
     private var buf: UnsafeMutableBufferPointer<Float>?
     private var cap = 0, w = 0
     private var phase: Float = 0
-    private let baseMs: Float = 1
+    private var hpCoef: Float = 0.98, hpX1: Float = 0, hpY1: Float = 0
+    private let baseMs: Float = 0.6
     init() { super.init(kind: .flanger) }
     override func prepare(sampleRate: Double, maxBlock: Int) {
         sr = Float(sampleRate)
-        let need = Int(sampleRate * 0.03) + 4
+        let need = Int(sampleRate * 0.03) + 8
         if buf == nil || cap != need { buf?.deallocate(); let b = UnsafeMutableBufferPointer<Float>.allocate(capacity: need); b.initialize(repeating: 0); buf = b; cap = need }
         w = 0
+        hpCoef = expf(-2 * Float.pi * 90 / sr)
+        mixSm.prepare(sampleRate: sampleRate, ms: 10); mixSm.snap()
     }
-    override func reset() { if let p = buf?.baseAddress { for i in 0..<cap { p[i] = 0 } }; w = 0; phase = 0 }
+    override func reset() { if let p = buf?.baseAddress { for i in 0..<cap { p[i] = 0 } }; w = 0; phase = 0; hpX1 = 0; hpY1 = 0; mixSm.snap() }
     override func process(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
         guard let base = buf?.baseAddress, cap > 8 else { return }
-        let inc = 2 * Float.pi * rateHz / sr, fb = feedback, mx = mix
+        let inc = 2 * Float.pi * rateHz / sr, fb = min(feedback, 0.98), hp = hpCoef
         let baseS = baseMs / 1000 * sr, depthS = depthMs / 1000 * sr
-        var ph = phase, wi = w
+        var ph = phase, wi = w, x1 = hpX1, y1 = hpY1
         for i in 0..<n {
             let dry = s[i]
-            let delayS = baseS + depthS * (0.5 * (1 - cosf(ph)))
-            let rd = Float(wi) - delayS
-            let r0 = Int(rd.rounded(.down)), frac = rd - rd.rounded(.down)
-            let i0 = ((r0 % cap) + cap) % cap, i1 = (i0 + 1) % cap
-            let wet = base[i0] * (1 - frac) + base[i1] * frac
-            base[wi] = dry + wet * fb
+            // Sine-shaped-triangle LFO: perceptually even sweep across the log-frequency comb.
+            let tri = abs(ph / Float.pi - 1)                        // 1 → 0 → 1
+            let lfo = 0.5 * (1 - cosf(Float.pi * tri))
+            let wet = ringReadHermite(base, cap, wi, baseS + depthS * lfo)
+            let fbHP = wet - x1 + hp * y1; x1 = wet; y1 = fbHP
+            base[wi] = dry + tanhf(fbHP * fb)
+            let mx = mixSm.next()
             s[i] = dry * (1 - mx) + wet * mx
             wi += 1; if wi >= cap { wi = 0 }
             ph += inc; if ph > 2 * Float.pi { ph -= 2 * Float.pi }
         }
-        phase = ph; w = wi
+        phase = ph; w = wi; hpX1 = x1; hpY1 = y1
     }
     deinit { buf?.deallocate() }
 }

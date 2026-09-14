@@ -8,7 +8,8 @@
 #     .XCInstall/Wrapper copy (has an executable but can be STALE from a prior deploy).
 #   * Launch with --terminate-existing or a running app gives "prevent launch" (RBS error 7).
 set -e
-DEV=2B76597E-2150-5B8F-AC97-39A954AFB44A     # `xcrun devicectl list devices` to find yours
+DEV=${DEV:-2B76597E-2150-5B8F-AC97-39A954AFB44A}   # override: DEV=<id> tools/deploy.sh  (`xcrun devicectl list devices`)
+# Known devices: iPhone 15 = 2B76597E-2150-5B8F-AC97-39A954AFB44A · iPhone 11 = E943B7FC-DC51-54BA-AFDD-DAFD616FE7AE
 BID=com.avrahamohana.NamRig
 EXCL="$1"
 cd "$(dirname "$0")/.."

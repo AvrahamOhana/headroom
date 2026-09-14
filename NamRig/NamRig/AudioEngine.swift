@@ -8,13 +8,17 @@
 import AVFoundation
 import Observation
 import Synchronization
+#if os(macOS)
+import CoreAudio
+#endif
 
 /// State the real-time render callbacks touch. NOT MainActor-isolated.
 final class RenderContext: @unchecked Sendable {
     let ring = FloatRingBuffer(capacity: 16_384)
     let scratch = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
     let chain = SignalChain()
-    var outputGain: Float = 1
+    var outputGain: Float = 1 { didSet { outSm.target = outputGain } }
+    var outSm = Smoother(1)
     var inPeak: Float = 0
     var outPeak: Float = 0
     var sr: Double = 48000
@@ -169,25 +173,34 @@ final class AudioEngine {
         didSet { amp.bypass.store(!ampEnabled, ordering: .relaxed) }
     }
     var inputDriveDb: Double = 0 {
-        didSet { amp.inputGain = powf(10, Float(inputDriveDb) / 20) }
+        didSet { amp.inputGain = powf(10, Float(inputDriveDb) / 20); paramDidChange?(.ampDrive, paramNormalized(.ampDrive)) }
     }
     var pedalEnabled = false { didSet { pedal.bypass.store(!pedalEnabled, ordering: .relaxed) } }
     var selectedPedalModelID: String? = nil { didSet { if oldValue != selectedPedalModelID { loadPedalModel() } } }
-    var pedalDriveDb: Double = 0 { didSet { pedal.inputGain = powf(10, Float(pedalDriveDb) / 20) } }
-    var pedalLevelDb: Double = 0 { didSet { pedal.makeupGain = powf(10, Float(pedalLevelDb) / 20) } }
+    var pedalDriveDb: Double = 0 { didSet { pedal.inputGain = powf(10, Float(pedalDriveDb) / 20); paramDidChange?(.pedalDrive, paramNormalized(.pedalDrive)) } }
+    var pedalLevelDb: Double = 0 { didSet { pedal.makeupGain = powf(10, Float(pedalLevelDb) / 20); paramDidChange?(.pedalLevel, paramNormalized(.pedalLevel)) } }
     var selectedPedalName: String { selectedPedalModelID.flatMap { id in models.first { $0.id == id }?.name } ?? "None" }
     var gateEnabled = true {
         didSet { gate.bypass.store(!gateEnabled, ordering: .relaxed) }
     }
-    var gateThresholdDb: Double = -34 {
-        didSet { gate.threshold = powf(10, Float(gateThresholdDb) / 20) }
-    }
+    var gateThresholdDb: Double = -34 { didSet { gate.thresholdDb = Float(gateThresholdDb); paramDidChange?(.gateThr, paramNormalized(.gateThr)) } }
+    var gateReleaseMs: Double = 80 { didSet { gate.releaseMs = Float(gateReleaseMs) } }
+    var gateRangeDb: Double = -80 { didSet { gate.rangeDb = Float(gateRangeDb) } }
+
+    // Wah — expression-pedal target (map a CC → MIDIParam.wah) or auto-envelope.
+    var wahEnabled = false { didSet { wah.bypass.store(!wahEnabled, ordering: .relaxed) } }
+    var wahPosition: Double = 0.5 { didSet { wah.position = Float(wahPosition); paramDidChange?(.wah, paramNormalized(.wah)) } }
+    var wahAuto = false { didSet { wah.auto = wahAuto } }
+    var wahSense: Double = 50 { didSet { wah.sensitivity = Float(wahSense / 100) } }
+    var wahMix: Double = 92 { didSet { wah.mix = Float(wahMix / 100) } }
     var outputLevelDb: Double = -6 {
-        didSet { if !muted { context.outputGain = powf(10, Float(outputLevelDb) / 20) } }
+        didSet { if !muted { context.outputGain = powf(10, Float(outputLevelDb) / 20) }; paramDidChange?(.output, paramNormalized(.output)) }
     }
     /// Instant MUTE / panic — silences output WITHOUT tearing down the engine (no restart hitch). Transient (not saved).
     var muted = false { didSet { context.outputGain = muted ? 0 : powf(10, Float(outputLevelDb) / 20) } }
     func toggleMute() { muted.toggle() }
+    /// Set by a MIDI footswitch; the UI observes it to present/dismiss the tuner.
+    var tunerRequested = false
     // Tier-1 stereo output stage (per-preset). `stereoWidth` drives both the ping-pong spread and the reverb width.
     var stereoOn = false { didSet { context.stereoEnabled = stereoOn } }
     var stereoPingMix: Double = 25 { didSet { context.ping.mixPct = Float(stereoPingMix) } }
@@ -197,7 +210,7 @@ final class AudioEngine {
     var stereoWidth: Double = 100 { didSet { context.ping.spreadPct = Float(stereoWidth); context.rev.widthPct = Float(stereoWidth) } }
 
     // End-of-chain phrase looper.
-    var loopLevel: Double = 100 { didSet { context.looper.loopLevel = Float(loopLevel / 100) } }
+    var loopLevel: Double = 100 { didSet { context.looper.loopLevel = Float(loopLevel / 100); paramDidChange?(.loopLevel, paramNormalized(.loopLevel)) } }
     private(set) var looperStateLabel = "Idle"
     var looperHasLoop: Bool { context.looper.hasLoop }
     func toggleLooper() { context.looper.toggle(); looperStateLabel = context.looper.stateName }
@@ -206,14 +219,16 @@ final class AudioEngine {
     var eqEnabled = true {
         didSet { eq.bypass.store(!eqEnabled, ordering: .relaxed) }
     }
-    var bassDb: Double = 0 { didSet { updateEQ() } }
-    var midDb: Double = 0 { didSet { updateEQ() } }
-    var trebleDb: Double = 0 { didSet { updateEQ() } }
+    var bassDb: Double = 0 { didSet { updateEQ(); paramDidChange?(.bass, paramNormalized(.bass)) } }
+    var midDb: Double = 0 { didSet { updateEQ(); paramDidChange?(.mid, paramNormalized(.mid)) } }
+    var trebleDb: Double = 0 { didSet { updateEQ(); paramDidChange?(.treble, paramNormalized(.treble)) } }
 
     var delayEnabled = false { didSet { delay.bypass.store(!delayEnabled, ordering: .relaxed) } }
     var delayTimeMs: Double = 350 { didSet { delay.delaySamples = Int(delayTimeMs / 1000 * preferredSampleRate) } }
-    var delayFeedbackPct: Double = 35 { didSet { delay.feedback = Float(delayFeedbackPct / 100) } }
-    var delayMixPct: Double = 30 { didSet { delay.mix = Float(delayMixPct / 100) } }
+    var delayFeedbackPct: Double = 35 { didSet { delay.feedback = Float(delayFeedbackPct / 100); paramDidChange?(.delayFb, paramNormalized(.delayFb)) } }
+    var delayMixPct: Double = 30 { didSet { delay.mix = Float(delayMixPct / 100); paramDidChange?(.delayMix, paramNormalized(.delayMix)) } }
+    var delayTonePct: Double = 60 { didSet { delay.tone = Float(delayTonePct / 100); paramDidChange?(.delayTone, paramNormalized(.delayTone)) } }
+    var compGainReductionDb: Float { comp.gainReductionDb }
 
     // Tap-tempo (Tempo.swift) — when delaySync is on, the delay time follows BPM × note division.
     var tempo = TempoClock()
@@ -227,9 +242,9 @@ final class AudioEngine {
     private func applyTempoToDelay() { delayTimeMs = min(max(tempo.ms(delayDivision), 50), 1000) }
 
     var reverbEnabled = false { didSet { reverb.bypass.store(!reverbEnabled, ordering: .relaxed) } }
-    var reverbDecayPct: Double = 70 { didSet { updateReverb() } }
+    var reverbDecayPct: Double = 70 { didSet { updateReverb(); paramDidChange?(.reverbDecay, paramNormalized(.reverbDecay)) } }
     var reverbDampPct: Double = 30 { didSet { updateReverb() } }
-    var reverbMixPct: Double = 25 { didSet { updateReverb() } }
+    var reverbMixPct: Double = 25 { didSet { updateReverb(); paramDidChange?(.reverbMix, paramNormalized(.reverbMix)) } }
 
     var irReverbEnabled = false { didSet { irReverb.bypass.store(!irReverbEnabled, ordering: .relaxed) } }
     var irReverbMixPct: Double = 35 { didSet { irReverb.mix = Float(irReverbMixPct / 100) } }
@@ -237,44 +252,44 @@ final class AudioEngine {
     var cabEnabled = true { didSet { cab.bypass.store(!cabEnabled, ordering: .relaxed) } }
 
     var compEnabled = false { didSet { comp.bypass.store(!compEnabled, ordering: .relaxed) } }
-    var compThresholdDb: Double = -18 { didSet { comp.thresholdDb = Float(compThresholdDb) } }
+    var compThresholdDb: Double = -18 { didSet { comp.thresholdDb = Float(compThresholdDb); paramDidChange?(.compThr, paramNormalized(.compThr)) } }
     var compRatio: Double = 4 { didSet { comp.ratio = Float(compRatio) } }
     var compAttackMs: Double = 10 { didSet { comp.setTimes(attackMs: Float(compAttackMs), releaseMs: Float(compReleaseMs)) } }
     var compReleaseMs: Double = 120 { didSet { comp.setTimes(attackMs: Float(compAttackMs), releaseMs: Float(compReleaseMs)) } }
-    var compMakeupDb: Double = 0 { didSet { comp.makeup = powf(10, Float(compMakeupDb) / 20) } }
+    var compMakeupDb: Double = 0 { didSet { comp.makeup = powf(10, Float(compMakeupDb) / 20); paramDidChange?(.compMakeup, paramNormalized(.compMakeup)) } }
 
     var driveEnabled = false { didSet { drive.bypass.store(!driveEnabled, ordering: .relaxed) } }
-    var driveAmount: Double = 4 { didSet { drive.drive = Float(driveAmount) } }
+    var driveAmount: Double = 4 { didSet { drive.drive = Float(driveAmount); paramDidChange?(.driveAmt, paramNormalized(.driveAmt)) } }
     var driveToneHz: Double = 4000 { didSet { drive.setTone(hz: Float(driveToneHz)) } }
-    var driveLevelDb: Double = 0 { didSet { drive.level = powf(10, Float(driveLevelDb) / 20) } }
+    var driveLevelDb: Double = 0 { didSet { drive.level = powf(10, Float(driveLevelDb) / 20); paramDidChange?(.driveLevel, paramNormalized(.driveLevel)) } }
 
     var driveMode: Int = 0 { didSet { drive.mode = driveMode } }
 
     var stompEnabled = false { didSet { circuitDrive.bypass.store(!stompEnabled, ordering: .relaxed) } }
     var stompModel: Int = 0 { didSet { circuitDrive.model = stompModel } }
-    var stompDrive: Double = 0.5 { didSet { circuitDrive.drive = Float(stompDrive) } }
+    var stompDrive: Double = 0.5 { didSet { circuitDrive.drive = Float(stompDrive); paramDidChange?(.stompDrive, paramNormalized(.stompDrive)) } }
     var stompTone: Double = 0.5 { didSet { circuitDrive.tone = Float(stompTone) } }
     var stompLevel: Double = 0.8 { didSet { circuitDrive.level = Float(stompLevel) } }
     var stompModelCount: Int { circuitDrive.modelCount }
     func stompModelName(_ i: Int) -> String { circuitDrive.modelName(i) }
 
     var boostEnabled = false { didSet { boost.bypass.store(!boostEnabled, ordering: .relaxed) } }
-    var boostDb: Double = 6 { didSet { boost.gain = powf(10, Float(boostDb) / 20) } }
+    var boostDb: Double = 6 { didSet { boost.gain = powf(10, Float(boostDb) / 20); paramDidChange?(.boostDb, paramNormalized(.boostDb)) } }
 
     var chorusEnabled = false { didSet { chorus.bypass.store(!chorusEnabled, ordering: .relaxed) } }
     var chorusRateHz: Double = 0.8 { didSet { chorus.rateHz = Float(chorusRateHz) } }
     var chorusDepthMs: Double = 6 { didSet { chorus.depthMs = Float(chorusDepthMs) } }
-    var chorusMixPct: Double = 40 { didSet { chorus.mix = Float(chorusMixPct / 100) } }
+    var chorusMixPct: Double = 40 { didSet { chorus.mix = Float(chorusMixPct / 100); paramDidChange?(.chorusMix, paramNormalized(.chorusMix)) } }
 
     var flangerEnabled = false { didSet { flanger.bypass.store(!flangerEnabled, ordering: .relaxed) } }
     var flangerRateHz: Double = 0.4 { didSet { flanger.rateHz = Float(flangerRateHz) } }
     var flangerDepthMs: Double = 2 { didSet { flanger.depthMs = Float(flangerDepthMs) } }
     var flangerFeedbackPct: Double = 50 { didSet { flanger.feedback = Float(flangerFeedbackPct / 100) } }
-    var flangerMixPct: Double = 50 { didSet { flanger.mix = Float(flangerMixPct / 100) } }
+    var flangerMixPct: Double = 50 { didSet { flanger.mix = Float(flangerMixPct / 100); paramDidChange?(.flangerMix, paramNormalized(.flangerMix)) } }
 
     var tremoloEnabled = false { didSet { tremolo.bypass.store(!tremoloEnabled, ordering: .relaxed) } }
     var tremoloRateHz: Double = 5 { didSet { tremolo.rateHz = Float(tremoloRateHz) } }
-    var tremoloDepthPct: Double = 50 { didSet { tremolo.depth = Float(tremoloDepthPct / 100) } }
+    var tremoloDepthPct: Double = 50 { didSet { tremolo.depth = Float(tremoloDepthPct / 100); paramDidChange?(.tremoloDepth, paramNormalized(.tremoloDepth)) } }
 
     var reverbType: Int = 3 { didSet { updateReverb() } }   // 0 room · 1 plate · 2 spring · 3 hall (real algorithm)
     func selectReverbType(_ t: Int) {
@@ -301,7 +316,7 @@ final class AudioEngine {
     func addBlock(_ kind: BlockKind) {
         guard !blockOrder.contains(kind) else { return }
         // Drive-family / pre-amp blocks belong in FRONT of the amp; everything else appends to the tail.
-        let preAmp: Set<BlockKind> = [.gate, .comp, .boost, .drive, .stomp, .pedal]
+        let preAmp: Set<BlockKind> = [.gate, .comp, .boost, .drive, .stomp, .wah, .pedal]
         if preAmp.contains(kind), let ampIdx = blockOrder.firstIndex(of: .amp) {
             blockOrder.insert(kind, at: ampIdx)
         } else {
@@ -313,7 +328,7 @@ final class AudioEngine {
     func setBlockEnabled(_ kind: BlockKind, _ on: Bool) {
         switch kind {
         case .gate: gateEnabled = on; case .comp: compEnabled = on; case .boost: boostEnabled = on
-        case .drive: driveEnabled = on; case .stomp: stompEnabled = on; case .pedal: pedalEnabled = on; case .amp: ampEnabled = on; case .cab: cabEnabled = on
+        case .drive: driveEnabled = on; case .stomp: stompEnabled = on; case .wah: wahEnabled = on; case .pedal: pedalEnabled = on; case .amp: ampEnabled = on; case .cab: cabEnabled = on
         case .eq: eqEnabled = on; case .chorus: chorusEnabled = on; case .flanger: flangerEnabled = on
         case .tremolo: tremoloEnabled = on; case .delay: delayEnabled = on; case .reverb: reverbEnabled = on
         case .irReverb: irReverbEnabled = on
@@ -322,7 +337,7 @@ final class AudioEngine {
     func isBlockEnabled(_ kind: BlockKind) -> Bool {
         switch kind {
         case .gate: return gateEnabled; case .comp: return compEnabled; case .boost: return boostEnabled
-        case .drive: return driveEnabled; case .stomp: return stompEnabled; case .pedal: return pedalEnabled; case .amp: return ampEnabled; case .cab: return cabEnabled
+        case .drive: return driveEnabled; case .stomp: return stompEnabled; case .wah: return wahEnabled; case .pedal: return pedalEnabled; case .amp: return ampEnabled; case .cab: return cabEnabled
         case .eq: return eqEnabled; case .chorus: return chorusEnabled; case .flanger: return flangerEnabled
         case .tremolo: return tremoloEnabled; case .delay: return delayEnabled; case .reverb: return reverbEnabled
         case .irReverb: return irReverbEnabled
@@ -345,6 +360,7 @@ final class AudioEngine {
     private let comp = CompressorBlock()
     private let drive = DriveBlock()
     private let circuitDrive = CircuitDriveBlock(kind: .stomp)
+    private let wah = WahBlock()
     private let amp = AmpBlock()
     private let cab = CabBlock(kind: .cab)
     private let eq = EQBlock()
@@ -368,18 +384,21 @@ final class AudioEngine {
     init() {
         refreshModels()
         if !models.contains(where: { $0.id == selectedModelID }) { selectedModelID = models.first?.id ?? selectedModelID }
-        let chainBlocks: [AudioBlock] = [gate, comp, boost, drive, circuitDrive, pedal, amp, cab, eq, chorus, flanger, tremolo, delay, reverb, irReverb]
+        let chainBlocks: [AudioBlock] = [gate, comp, boost, drive, circuitDrive, wah, pedal, amp, cab, eq, chorus, flanger, tremolo, delay, reverb, irReverb]
         context.chain.install(chainBlocks)
         for (i, b) in chainBlocks.enumerated() { indexByKind[b.kind] = i }
         applyOrder()
         context.outputGain = powf(10, Float(outputLevelDb) / 20)
         amp.inputGain = powf(10, Float(inputDriveDb) / 20)
-        gate.threshold = powf(10, Float(gateThresholdDb) / 20)
+        gate.thresholdDb = Float(gateThresholdDb); gate.releaseMs = Float(gateReleaseMs); gate.rangeDb = Float(gateRangeDb)
+        wah.bypass.store(!wahEnabled, ordering: .relaxed); wah.position = Float(wahPosition); wah.auto = wahAuto
+        wah.sensitivity = Float(wahSense / 100); wah.mix = Float(wahMix / 100)
         updateEQ()
         delay.bypass.store(!delayEnabled, ordering: .relaxed)
         delay.delaySamples = Int(delayTimeMs / 1000 * preferredSampleRate)
         delay.feedback = Float(delayFeedbackPct / 100)
         delay.mix = Float(delayMixPct / 100)
+        delay.tone = Float(delayTonePct / 100)
         reverb.bypass.store(!reverbEnabled, ordering: .relaxed)
         updateReverb()
         comp.bypass.store(!compEnabled, ordering: .relaxed)
@@ -417,11 +436,22 @@ final class AudioEngine {
         do {
             try model.loadModel(fromPath: tm.path)
             model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
-            let probe = selfTest(model)
-            model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
+            // Level-match without amplifying the noise floor: prefer the trainer's own loudness
+            // metadata (target −18 dB, like the official plugin); fall back to a sine probe. Makeup
+            // is capped at +12 dB either way — a quiet capture boosted +36 dB is pure hiss.
+            var makeupDb: Double
+            let how: String
+            if model.loudness.isFinite {
+                makeupDb = -18 - model.loudness; how = "loudness \(String(format: "%.1f", model.loudness)) dB"
+            } else {
+                let probe = selfTest(model)
+                model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
+                makeupDb = probe.nan ? 0 : Double(20 * log10(0.4 / max(probe.peak, 1e-4))); how = "probe"
+            }
+            makeupDb = max(-24, min(12, makeupDb))
             amp.setModel(model)
-            amp.makeupGain = probe.nan ? 1 : max(0.05, min(64, 0.4 / max(probe.peak, 1e-4)))
-            modelStatus = "\(tm.name) · raw \(String(format: "%.3f", probe.peak)) · auto \(String(format: "%+.0f", 20 * log10(amp.makeupGain))) dB"
+            amp.makeupGain = powf(10, Float(makeupDb) / 20)
+            modelStatus = "\(tm.name) · \(how) · trim \(String(format: "%+.0f", makeupDb)) dB"
         } catch {
             amp.setModel(nil)
             modelStatus = "❌ Load failed: \(error.localizedDescription)"
@@ -549,10 +579,21 @@ final class AudioEngine {
 
     func applyCurrentPreset() { if presets.indices.contains(currentPresetIndex) { apply(presets[currentPresetIndex]) } }
 
+    /// Fired after a preset is applied (MIDI out: Program Change + the preset's own send list).
+    var presetDidLoad: ((Int, Preset) -> Void)?
+    /// Fired when a MIDI-mappable param moves from the UI (controller feedback).
+    var paramDidChange: ((MIDIParam, Double) -> Void)?
+
     func loadPreset(at i: Int) {
         guard presets.indices.contains(i) else { return }
         currentPresetIndex = i
         apply(presets[i])
+        presetDidLoad?(i, presets[i])
+    }
+    /// Per-preset MIDI-out list (messages sent to external gear when this preset loads).
+    var currentMidiOut: [MIDIOutMessage] {
+        get { presets.indices.contains(currentPresetIndex) ? presets[currentPresetIndex].midiOut : [] }
+        set { guard presets.indices.contains(currentPresetIndex) else { return }; presets[currentPresetIndex].midiOut = newValue; PresetStore.save(presets) }
     }
     func nextPreset() { guard !presets.isEmpty else { return }; loadPreset(at: (currentPresetIndex + 1) % presets.count) }
     func prevPreset() { guard !presets.isEmpty else { return }; loadPreset(at: (currentPresetIndex - 1 + presets.count) % presets.count) }
@@ -583,7 +624,27 @@ final class AudioEngine {
         case .compMakeup: compMakeupDb = v; case .boostDb: boostDb = v
         case .pedalDrive: pedalDriveDb = v; case .pedalLevel: pedalLevelDb = v
         case .chorusMix: chorusMixPct = v;  case .flangerMix: flangerMixPct = v; case .tremoloDepth: tremoloDepthPct = v
+        case .wah: wahPosition = v;         case .delayTone: delayTonePct = v;  case .compThr: compThresholdDb = v
+        case .stompDrive: stompDrive = v;   case .loopLevel: loopLevel = v
         }
+    }
+    /// Current value of a MIDI-mappable param, normalized 0…1 (for controller feedback / MIDI out).
+    func paramNormalized(_ p: MIDIParam) -> Double {
+        let r = p.range
+        let v: Double
+        switch p {
+        case .ampDrive: v = inputDriveDb;   case .output: v = outputLevelDb;   case .gateThr: v = gateThresholdDb
+        case .bass: v = bassDb;             case .mid: v = midDb;              case .treble: v = trebleDb
+        case .driveAmt: v = driveAmount;    case .driveLevel: v = driveLevelDb
+        case .delayMix: v = delayMixPct;    case .delayFb: v = delayFeedbackPct
+        case .reverbMix: v = reverbMixPct;  case .reverbDecay: v = reverbDecayPct
+        case .compMakeup: v = compMakeupDb; case .boostDb: v = boostDb
+        case .pedalDrive: v = pedalDriveDb; case .pedalLevel: v = pedalLevelDb
+        case .chorusMix: v = chorusMixPct;  case .flangerMix: v = flangerMixPct; case .tremoloDepth: v = tremoloDepthPct
+        case .wah: v = wahPosition;         case .delayTone: v = delayTonePct;  case .compThr: v = compThresholdDb
+        case .stompDrive: v = stompDrive;   case .loopLevel: v = loopLevel
+        }
+        return max(0, min(1, (v - r.lowerBound) / (r.upperBound - r.lowerBound)))
     }
 
     func saveCurrent(as name: String) {
@@ -630,7 +691,7 @@ final class AudioEngine {
     }
 
     private func capture(name: String) -> Preset {
-        Preset(name: name, model: selectedModelID,
+        var p = Preset(name: name, model: selectedModelID,
                ampOn: ampEnabled, ampDrive: inputDriveDb,
                gateOn: gateEnabled, gateThr: gateThresholdDb,
                compOn: compEnabled, compThr: compThresholdDb, compRatio: compRatio, compAtk: compAttackMs, compRel: compReleaseMs, compMakeup: compMakeupDb,
@@ -651,8 +712,16 @@ final class AudioEngine {
                pedalOn: pedalEnabled, pedalModel: selectedPedalModelID ?? "", pedalDrive: pedalDriveDb, pedalLevel: pedalLevelDb,
                cabIR: cabIRFile,
                irReverbOn: irReverbEnabled, irReverbMix: irReverbMixPct, irReverbPredelay: irReverbPredelayMs, irReverbIR: irReverbFile)
+        p.gateRel = gateReleaseMs; p.gateRange = gateRangeDb
+        p.delayTone = delayTonePct; p.delaySync = delaySync; p.delayDiv = delayDivision; p.bpm = tempo.bpm
+        p.wahOn = wahEnabled; p.wahPos = wahPosition; p.wahAuto = wahAuto; p.wahSense = wahSense; p.wahMix = wahMix
+        if presets.indices.contains(currentPresetIndex) { p.midiOut = presets[currentPresetIndex].midiOut }
+        return p
     }
     private func apply(_ p: Preset) {
+        // A preset load moves every param at once — don't spray CC feedback for each one.
+        let feedback = paramDidChange; paramDidChange = nil
+        defer { paramDidChange = feedback; delay.snapTime() }
         let changed = p.model != selectedModelID
         selectedModelID = p.model
         if !changed { loadModel() }   // same model → didSet didn't reload; force it
@@ -682,6 +751,11 @@ final class AudioEngine {
         applyCabIR(p.cabIR)
         irReverbEnabled = p.irReverbOn; irReverbMixPct = p.irReverbMix; irReverbPredelayMs = p.irReverbPredelay
         applyReverbIR(p.irReverbIR)
+        gateReleaseMs = p.gateRel; gateRangeDb = p.gateRange
+        delayTonePct = p.delayTone
+        if p.bpm > 0 { tempo.bpm = p.bpm }
+        delayDivision = p.delayDiv; delaySync = p.delaySync
+        wahEnabled = p.wahOn; wahPosition = p.wahPos; wahAuto = p.wahAuto; wahSense = p.wahSense; wahMix = p.wahMix
     }
 
     // MARK: - Audio
@@ -707,11 +781,14 @@ final class AudioEngine {
             startTuner()
         } catch {
             lastError = error.localizedDescription
+            #if os(iOS)
             try? AVAudioSession.sharedInstance().setActive(false)
+            #endif
             state = .stopped
         }
     }
 
+    #if os(iOS)
     private func configureSession() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker])
@@ -719,6 +796,37 @@ final class AudioEngine {
         try session.setPreferredIOBufferDuration(preferredBufferFrames / preferredSampleRate)
         try session.setActive(true)
     }
+    #else
+    // macOS: no AVAudioSession. The interface is chosen per I/O unit (CoreAudio HAL) and the
+    // buffer size is a device property. Selections persist by device NAME (IDs change per boot).
+    var inputDeviceName: String? {
+        get { UserDefaults.standard.string(forKey: "macInputDevice") }
+        set { UserDefaults.standard.set(newValue, forKey: "macInputDevice"); if state == .running { stop(); start() } }
+    }
+    var outputDeviceName: String? {
+        get { UserDefaults.standard.string(forKey: "macOutputDevice") }
+        set { UserDefaults.standard.set(newValue, forKey: "macOutputDevice"); if state == .running { stop(); start() } }
+    }
+    var inputDevices: [AudioDevice] { AudioDevices.inputs }
+    var outputDevices: [AudioDevice] { AudioDevices.outputs }
+    private var activeInputDevice: AudioDeviceID? = nil
+    private var activeOutputDevice: AudioDeviceID? = nil
+
+    private func configureSession() throws {
+        let inDev = AudioDevices.inputs.first { $0.name == inputDeviceName }?.id ?? AudioDevices.defaultDevice(input: true)
+        let outDev = AudioDevices.outputs.first { $0.name == outputDeviceName }?.id ?? AudioDevices.defaultDevice(input: false)
+        guard let inDev else {
+            throw NSError(domain: "AudioEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: "No audio input device — plug in your interface and pick it in Settings → Audio."])
+        }
+        // Touch the nodes so their HAL units exist, then point them at the devices BEFORE formats are read.
+        _ = engine.inputNode; _ = engine.outputNode
+        AudioDevices.assign(inDev, to: engine.inputNode)
+        if let outDev { AudioDevices.assign(outDev, to: engine.outputNode) }
+        AudioDevices.setBufferFrames(UInt32(preferredBufferFrames), on: inDev)
+        if let outDev, outDev != inDev { AudioDevices.setBufferFrames(UInt32(preferredBufferFrames), on: outDev) }
+        activeInputDevice = inDev; activeOutputDevice = outDev
+    }
+    #endif
 
     private func startEngine() throws {
         let input = engine.inputNode
@@ -746,6 +854,7 @@ final class AudioEngine {
         context.rev.mixPct = Float(stereoSpace); context.rev.widthPct = Float(stereoWidth)
         context.sr = inputFormat.sampleRate
         context.cpuLoad = 0
+        context.outSm.prepare(sampleRate: inputFormat.sampleRate, ms: 10); context.outSm.snap()
         let context = self.context  // capture the RT box (Sendable), never `self`
 
         let sink = AVAudioSinkNode { _, frameCount, ablPtr in
@@ -785,7 +894,6 @@ final class AudioEngine {
 
             // Output stage: mono → (optional) wide stereo. Wet-only ping-pong + decorrelated reverb summed
             // on top of the centered dry; bit-identical mono on both channels when stereo is OFF.
-            let og = context.outputGain
             let out = UnsafeMutableAudioBufferListPointer(ablPtr)
             if context.stereoEnabled, out.count >= 2,
                let dL = out[0].mData?.assumingMemoryBound(to: Float.self),
@@ -793,6 +901,7 @@ final class AudioEngine {
                 context.ping.processStereo(s, context.ppL, context.ppR, n)   // wet only
                 context.rev.processStereo(s, context.rvL, context.rvR, n)    // wet only
                 for i in 0..<n {
+                    let og = context.outSm.next()
                     var l = (s[i] + context.ppL[i] + context.rvL[i]) * og
                     var r = (s[i] + context.ppR[i] + context.rvR[i]) * og
                     if !l.isFinite { l = 0 } else if l > 1 { l = 1 } else if l < -1 { l = -1 }
@@ -801,7 +910,7 @@ final class AudioEngine {
                 }
             } else {
                 for i in 0..<n {
-                    var v = s[i] * og
+                    var v = s[i] * context.outSm.next()
                     if !v.isFinite { v = 0 } else if v > 1 { v = 1 } else if v < -1 { v = -1 }
                     s[i] = v
                 }
@@ -832,13 +941,24 @@ final class AudioEngine {
     }
 
     private func refreshMetrics() {
+        inputSampleRate = engine.inputNode.inputFormat(forBus: 0).sampleRate
+        outputSampleRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         sampleRate = session.sampleRate
         ioBufferMs = session.ioBufferDuration * 1000
         inputLatencyMs = session.inputLatency * 1000
         outputLatencyMs = session.outputLatency * 1000
-        inputSampleRate = engine.inputNode.inputFormat(forBus: 0).sampleRate
-        outputSampleRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+        #else
+        sampleRate = inputSampleRate
+        if let d = activeInputDevice, sampleRate > 0 {
+            ioBufferMs = Double(AudioDevices.bufferFrames(of: d)) / sampleRate * 1000
+            inputLatencyMs = Double(AudioDevices.latencyFrames(of: d, input: true)) / sampleRate * 1000
+        }
+        if let d = activeOutputDevice, outputSampleRate > 0 {
+            outputLatencyMs = Double(AudioDevices.latencyFrames(of: d, input: false)) / outputSampleRate * 1000
+        }
+        #endif
     }
 
     // MARK: - Tuner
@@ -873,7 +993,9 @@ final class AudioEngine {
         sourceNode = nil
         context.inPeak = 0
         context.outPeak = 0
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        #endif
         state = .stopped
     }
 }

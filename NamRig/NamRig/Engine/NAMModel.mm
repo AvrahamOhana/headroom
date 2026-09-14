@@ -85,4 +85,19 @@
   return _model ? _model->GetExpectedSampleRate() : -1.0;
 }
 
+- (double)loudness {
+  if (!_model || !_model->HasLoudness()) return NAN;
+  try { return _model->GetLoudness(); } catch (...) { return NAN; }
+}
+
+- (double)inputLevelDbu {
+  if (!_model || !_model->HasInputLevel()) return NAN;
+  try { return _model->GetInputLevel(); } catch (...) { return NAN; }
+}
+
+- (double)outputLevelDbu {
+  if (!_model || !_model->HasOutputLevel()) return NAN;
+  try { return _model->GetOutputLevel(); } catch (...) { return NAN; }
+}
+
 @end

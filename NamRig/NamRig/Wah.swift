@@ -29,16 +29,16 @@ nonisolated final class WahBlock: AudioBlock {
     private var env: Float = 0
     private var atk: Float = 0.99, rel: Float = 0.9995
 
-    // No `.wah` default yet — the BlockKind case + chain/UI/MIDI wiring is added at integration time.
-    override init(kind: BlockKind) { super.init(kind: kind) }
+    override init(kind: BlockKind = .wah) { super.init(kind: kind) }
 
     override func prepare(sampleRate: Double, maxBlock: Int) {
         fs = Float(sampleRate)
         atk = expf(-1.0 / (0.005 * fs))   // ~5 ms attack
         rel = expf(-1.0 / (0.080 * fs))   // ~80 ms release
+        posCoef = 1 - expf(-1.0 / (0.004 * fs))   // ~4 ms pedal glide
         reset()
     }
-    override func reset() { ic1 = 0; ic2 = 0; env = 0 }
+    override func reset() { ic1 = 0; ic2 = 0; env = 0; posSm = min(max(position, 0), 1) }
 
     /// One TPT-SVF sample → bandpass output. `g = tan(π·fc/fs)`, `k = 1/Q`.
     @inline(__always) private func bandpass(_ x: Float, _ g: Float, _ k: Float) -> Float {
@@ -72,13 +72,17 @@ nonisolated final class WahBlock: AudioBlock {
                 s[i] = x * (1 - mx) + y * mx
             }
         } else {
-            let pos = min(max(position, 0), 1)
-            let fc = min(loHz * powf(hiHz / loHz, pos), nyq)
-            let g = tanf(Float.pi * fc / fs)
+            // Glide toward the pedal position so a 7-bit expression CC never steps audibly.
+            let target = min(max(position, 0), 1)
             for i in 0..<n {
+                posSm += (target - posSm) * posCoef
+                let fc = min(loHz * powf(hiHz / loHz, posSm), nyq)
+                let g = tanf(Float.pi * fc / fs)
                 let y = bandpass(s[i], g, k) * wetBoost
                 s[i] = s[i] * (1 - mx) + y * mx
             }
         }
     }
+    private var posSm: Float = 0.5
+    private var posCoef: Float = 0.002
 }
