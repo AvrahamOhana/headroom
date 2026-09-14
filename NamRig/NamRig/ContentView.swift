@@ -210,145 +210,11 @@ struct ContentView: View {
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    // MARK: - Chain strip
+    // MARK: - Chain strip (ChainStrip.swift)
 
     private var chainStrip: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                Text("SIGNAL CHAIN").font(.caption.bold()).foregroundStyle(.secondary)
-                Spacer()
-                Button { audio.dualOn.toggle(); Haptics.impact(.medium) } label: {
-                    Label(audio.dualOn ? "A ∥ B" : "Dual", systemImage: audio.dualOn ? "rectangle.split.1x2.fill" : "rectangle.split.1x2")
-                        .font(.caption.bold())
-                }.buttonStyle(.plain).foregroundStyle(audio.dualOn ? .cyan : .secondary)
-                Button { showReorder = true } label: {
-                    Label("Reorder", systemImage: "arrow.up.arrow.down").font(.caption.bold())
-                }.buttonStyle(.plain).foregroundStyle(.secondary)
-            }
-            pathRow(.a)
-            if audio.dualOn { pathRow(.b) }
-            HStack(spacing: 4) {
-                endLabel(audio.dualOn ? "A+B" : "")
-                connector
-                looperTile
-                connector
-                outputTile
-                Spacer()
-            }
-            .padding(.vertical, 2)
-        }
+        ChainStripView(audio: audio, selected: $selected, outputSelected: $outputSelected, looperSelected: $looperSelected, showReorder: $showReorder)
     }
-
-    /// One path's tiles. Tiles are draggable; dropping on a tile inserts before it, dropping on the
-    /// row's tail appends. Dragging between rows moves the block (its settings come along).
-    private func pathRow(_ id: RigPathID) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                endLabel(audio.dualOn ? id.label : "IN")
-                ForEach(audio.order(of: id).compactMap { ChainBlock($0) }) { block in
-                    connector
-                    tile(block, in: id)
-                }
-                connector
-                addTile(id)
-                dropTail(id)
-            }
-            .padding(.vertical, 2)
-        }
-        .overlay(alignment: .leading) {
-            if audio.dualOn {
-                RoundedRectangle(cornerRadius: 2).fill(audio.focus == id ? Color.cyan : Color.clear).frame(width: 3, height: 60)
-            }
-        }
-    }
-
-    private func dragPayload(_ block: ChainBlock, _ id: RigPathID) -> String { "\(id.rawValue)|\(block.kind.rawValue)" }
-    private func handleDrop(_ items: [String], to: RigPathID, before: ChainBlock?) -> Bool {
-        guard let item = items.first else { return false }
-        let parts = item.split(separator: "|", maxSplits: 1).map(String.init)
-        guard parts.count == 2, let from = RigPathID(rawValue: parts[0]), let kind = BlockKind(rawValue: parts[1]) else { return false }
-        if before?.kind == kind && from == to { return true }
-        audio.moveBlock(kind, from: from, to: to, before: before?.kind)
-        Haptics.impact(.light)
-        return true
-    }
-
-    private func tile(_ block: ChainBlock, in id: RigPathID) -> some View {
-        let on = audio.isBlockEnabled(block.kind, in: id), sel = selected == block && audio.focus == id
-        return Button {
-            audio.setFocus(id)
-            selected = (sel ? nil : block); outputSelected = false; looperSelected = false
-        } label: {
-            VStack(spacing: 6) {
-                Image(systemName: block.icon).font(.system(size: 20, weight: .semibold))
-                Text(block.short).font(.system(size: 10, weight: .heavy))
-            }
-            .frame(width: 58, height: 74)
-            .foregroundStyle(on ? .white : .white.opacity(0.3))
-            .background(on ? block.color.gradient : Color.gray.opacity(0.22).gradient,
-                        in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(sel ? .white : .clear, lineWidth: 2))
-        }
-        .buttonStyle(.plain)
-        .draggable(dragPayload(block, id))
-        .dropDestination(for: String.self) { items, _ in handleDrop(items, to: id, before: block) }
-        .contextMenu {
-            Button { audio.setBlockEnabled(block.kind, !on, in: id) } label: { Label(on ? "Turn off" : "Turn on", systemImage: "power") }
-            if audio.dualOn && !audio.order(of: id.other).contains(block.kind) {
-                Button { audio.moveBlock(block.kind, from: id, to: id.other, before: nil) } label: { Label("Move to path \(id.other.label)", systemImage: "arrow.turn.down.right") }
-            }
-            Button(role: .destructive) { audio.removeBlock(block.kind, in: id); if selected == block && audio.focus == id { selected = nil } } label: { Label("Remove", systemImage: "trash") }
-        }
-    }
-
-    private func addTile(_ id: RigPathID) -> some View {
-        let avail = audio.availableToAdd(in: id)
-        return Menu {
-            ForEach(avail, id: \.self) { kind in
-                if let cb = ChainBlock(kind) {
-                    Button { audio.addBlock(kind, in: id); audio.setFocus(id); selected = cb; outputSelected = false; looperSelected = false } label: { Label(cb.full, systemImage: cb.icon) }
-                }
-            }
-        } label: {
-            VStack(spacing: 6) {
-                Image(systemName: "plus").font(.system(size: 20, weight: .semibold))
-                Text("ADD").font(.system(size: 10, weight: .heavy))
-            }
-            .frame(width: 58, height: 74)
-            .foregroundStyle(.secondary)
-            .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1.5, dash: [4])))
-        }
-        .disabled(avail.isEmpty)
-    }
-
-    /// Drop zone at the end of a row: drop here to append.
-    private func dropTail(_ id: RigPathID) -> some View {
-        RoundedRectangle(cornerRadius: 12).fill(Color.clear)
-            .frame(width: 40, height: 74)
-            .overlay(Image(systemName: "arrow.down.to.line").foregroundStyle(.tertiary).font(.caption))
-            .dropDestination(for: String.self) { items, _ in handleDrop(items, to: id, before: nil) }
-    }
-
-    private var looperTile: some View {
-        let active = audio.looperStateLabel != "Idle"
-        return Button { looperSelected.toggle(); outputSelected = false; selected = nil } label: {
-            VStack(spacing: 6) {
-                Image(systemName: "repeat.circle.fill").font(.system(size: 20, weight: .semibold))
-                Text("LOOP").font(.system(size: 10, weight: .heavy))
-            }
-            .frame(width: 58, height: 74)
-            .foregroundStyle(.white)
-            .background(active ? Color.green.gradient : Color.green.opacity(0.45).gradient, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(looperSelected ? .white : .clear, lineWidth: 2))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func endLabel(_ t: String) -> some View {
-        Text(t).font(.caption2.bold()).foregroundStyle(.secondary).frame(width: 26, height: 74)
-    }
-    private var connector: some View { Rectangle().fill(.secondary.opacity(0.4)).frame(width: 6, height: 2) }
 
     // MARK: - Editor
 
@@ -362,6 +228,11 @@ struct ContentView: View {
                 Image(systemName: block.icon).foregroundStyle(isOn(block) ? block.color : .secondary)
                 Text(block.full).font(.headline)
                 Spacer()
+                if audio.dualOn && !audio.order(of: audio.focus.other).contains(block.kind) {
+                    Button { let to = audio.focus.other; audio.moveBlock(block.kind, from: audio.focus, to: to, before: nil); audio.setFocus(to) } label: {
+                        Label("→ \(audio.focus.other.label)", systemImage: "arrow.turn.down.right").font(.caption.bold())
+                    }.buttonStyle(.bordered).controlSize(.small)
+                }
                 Button { audio.removeBlock(block.kind); selected = nil } label: { Image(systemName: "trash").font(.subheadline) }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                 Toggle("", isOn: enabled(block)).labelsHidden().tint(.green)
@@ -625,21 +496,6 @@ struct ContentView: View {
             .inlineTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showReorder = false } } }
         }
-    }
-
-    private var outputTile: some View {
-        Button { outputSelected.toggle(); selected = nil } label: {
-            VStack(spacing: 6) {
-                Image(systemName: "slider.horizontal.3").font(.system(size: 20, weight: .semibold))
-                Text("OUT").font(.system(size: 10, weight: .heavy))
-            }
-            .frame(width: 58, height: 74)
-            .foregroundStyle(.white)
-            .background(LinearGradient(colors: [.cyan, .blue], startPoint: .top, endPoint: .bottom),
-                        in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(outputSelected ? .white : .clear, lineWidth: 2))
-        }
-        .buttonStyle(.plain)
     }
 
     private var outputEditorPanel: some View {
