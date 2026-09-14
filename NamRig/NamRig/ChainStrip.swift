@@ -35,11 +35,18 @@ struct ChainStripView: View {
         var grabOffset: CGSize         // finger − tile center at lift
         var target: (path: RigPathID, index: Int)?
         var lifted = false
+        /// Center x of slot 0 per row, snapshotted at lift. Slots are a uniform grid (tile + connector),
+        /// so the drop index is `round((x − origin) / pitch)` — deterministic, no re-measuring mid-drag.
+        var origins: [RigPathID: CGFloat] = [:]
     }
+    /// Measured geometry lives in a reference box, NOT @State: writing it from a preference change
+    /// must not invalidate the view (that was a layout→measure→layout loop that froze the UI).
+    private final class FrameStore { var tiles: [TileKey: CGRect] = [:]; var rows: [RigPathID: CGRect] = [:] }
     @State private var drag: Drag? = nil
-    @State private var tileFrames: [TileKey: CGRect] = [:]
-    @State private var rowFrames: [RigPathID: CGRect] = [:]
+    @State private var frames = FrameStore()
     private let tileW: CGFloat = 58, tileH: CGFloat = 74
+    private let spacing: CGFloat = 4, connectorW: CGFloat = 6
+    private var pitch: CGFloat { tileW + connectorW + 2 * spacing }
     private let space = "chainStrip"
 
     var body: some View {
@@ -71,8 +78,8 @@ struct ChainStripView: View {
             .padding(.vertical, 2)
         }
         .coordinateSpace(name: space)
-        .onPreferenceChange(TileFramesKey.self) { tileFrames = $0 }
-        .onPreferenceChange(RowFramesKey.self) { rowFrames = $0 }
+        .onPreferenceChange(TileFramesKey.self) { [frames] v in frames.tiles = v }
+        .onPreferenceChange(RowFramesKey.self) { [frames] v in frames.rows = v }
         .overlay(alignment: .topLeading) { liftedTile }
     }
 
@@ -163,9 +170,19 @@ struct ChainStripView: View {
             .onChanged { value in
                 guard case .second(true, let g?) = value else { return }
                 if drag == nil {
-                    let center = tileFrames[TileKey(path: id, kind: kind)].map { CGPoint(x: $0.midX, y: $0.midY) } ?? g.startLocation
-                    drag = Drag(kind: kind, from: id, location: g.location,
-                                grabOffset: CGSize(width: g.startLocation.x - center.x, height: g.startLocation.y - center.y))
+                    let center = frames.tiles[TileKey(path: id, kind: kind)].map { CGPoint(x: $0.midX, y: $0.midY) } ?? g.startLocation
+                    var d = Drag(kind: kind, from: id, location: g.location,
+                                 grabOffset: CGSize(width: g.startLocation.x - center.x, height: g.startLocation.y - center.y))
+                    // Slot-0 origin per row from the tiles as laid out right now (nothing is animating yet).
+                    for row in (audio.dualOn ? RigPathID.allCases : [.a]) {
+                        let order = audio.order(of: row)
+                        if let (i, f) = order.enumerated().compactMap({ i, k in frames.tiles[TileKey(path: row, kind: k)].map { (i, $0) } }).first {
+                            d.origins[row] = f.midX - CGFloat(i) * pitch
+                        } else if let rf = frames.rows[row] {
+                            d.origins[row] = rf.minX + 26 + spacing + connectorW + spacing + tileW / 2   // empty row: after the end label
+                        }
+                    }
+                    drag = d
                     Haptics.impact(.medium)
                 }
                 drag?.location = g.location
@@ -178,15 +195,18 @@ struct ChainStripView: View {
     private func retarget(_ p: CGPoint) {
         guard var d = drag else { return }
         let rows = audio.dualOn ? RigPathID.allCases : [.a]
-        // Row: the one whose vertical band contains the finger, else the nearest.
+        // Row: the one whose vertical band is nearest the finger.
         let row = rows.min { a, b in
-            let fa = rowFrames[a] ?? .zero, fb = rowFrames[b] ?? .zero
+            let fa = frames.rows[a] ?? .zero, fb = frames.rows[b] ?? .zero
             return abs(p.y - fa.midY) < abs(p.y - fb.midY)
         } ?? d.from
-        if row != d.from && audio.order(of: row).contains(d.kind) { d.target = nil; drag = d; return }   // B already has one
-        // Index: how many REAL tiles of that row sit left of the finger.
+        if row != d.from && audio.order(of: row).contains(d.kind) {            // that path already has one
+            if d.target != nil { d.target = nil; drag = d }
+            return
+        }
         let others = audio.order(of: row).filter { $0 != d.kind }
-        let idx = others.filter { k in (tileFrames[TileKey(path: row, kind: k)]?.midX ?? .infinity) < p.x }.count
+        let origin = d.origins[row] ?? p.x
+        let idx = max(0, min(others.count, Int(((p.x - origin) / pitch).rounded())))
         let new = (path: row, index: idx)
         if d.target?.path != new.path || d.target?.index != new.index {
             if d.target != nil { Haptics.impact(.light) }
