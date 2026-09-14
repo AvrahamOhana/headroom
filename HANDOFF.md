@@ -187,6 +187,27 @@ is in its header; must print `ALL PASS`).
   +8.2 dB (loudness metadata −26.2) → −4.9 dBFS, floor −71 dB; + gate → floor −119 dB.
   Test DI: `ThirdParty/NeuralAmpModelerCore/example_audio/input.wav` (synthetic — digital silence; add `--noise`).
 
+### Dual amp / stereo routing (2026-09-14) — DONE (was roadmap item C)
+- **Model:** the free-order chain stays. `applyOrder()` derives `split` = index of the first of {Amp, Cab} and
+  `merge` = index after the last of them and publishes both into `SignalChain` (atomics, next to `count`).
+  `[0, split)` = common pre (mono) · `[split, merge)` = **Path A** (your Amp→Cab, plus anything the user dragged
+  between them) · `[merge, count)` = post. **Path B** = `context.chainB` = `[ampB, cabB]` (own capture / drive /
+  IR / level / pan). Render (dual on): pre → copy → A ∥ B → L/R mix (level × `equalPowerPan`, 4 smoothed gains
+  `gAL/gAR/gBL/gBR`) → post **in stereo** → looper on the mid (playback added to both sides) → the Tier-1
+  stereo widen stage is fed the mid → out. Dual OFF = the exact old mono render path (bit-identical).
+- **Stereo post:** `context.chainR` holds a CLONE of every non-amp/cab block (`gateR … irReverbR`) ordered like
+  the post segment; it processes the RIGHT channel. Every param write goes through the plural arrays
+  (`gates`, `comps`, `delays`, …) — **when you add a block param, write it as `for b in xs { b.p = v }`**, or R
+  silently drifts. The pedal capture loads TWO `NAMModel` instances (a model carries state; L/R can't share).
+- Preset: `dualOn, modelB, ampBDrive, cabIRB, ampALevel, ampBLevel, ampAPan, ampBPan`. UI: Amp editor → "Dual
+  Amp" toggle → Path B capture menu (Import / Browse TONE3000 `.ampB`), Drive B, Level A/B, Pan A/B; CAB editor
+  shows the Cab B row (`.cabB` browse / File). `ModelSlot` replaces the old `asPedal:` on `importModel`.
+  MIDI params `ampBDrive/ampALevel/ampBLevel`. Tiles read "AMP A|B" / "CAB A|B" while on. ~2× CPU while on.
+- `tools/blocks_test.swift` covers `SignalChain.render(from:to:)` + split/merge clamping.
+- TONE3000 on macOS: the `namrig://` scheme is registered in `NamRig/Info.plist` (`INFOPLIST_FILE`, merged with the
+  generated plist) — `ASWebAuthenticationSession` on the Mac requires it. Browser sheet has a fixed Mac size
+  (`sheetSize`), tone fields are `is_favorite` / `architecture_version`, HTTP ≥ 400 now surfaces as an error.
+
 ## 6. Pending work — pick up here (in priority order)
 
 ### A. Device smoke-test the 2026-09-14 pass (above), then commit

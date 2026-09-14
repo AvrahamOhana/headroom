@@ -1110,6 +1110,9 @@ final class SignalChain: @unchecked Sendable {
     private var all: [AudioBlock] = []
     private let order: UnsafeMutableBufferPointer<Int>
     private let count = Atomic<Int>(0)
+    /// Dual-path markers into the order: [0, split) = common pre, [split, merge) = path A, [merge, count) = post.
+    let split = Atomic<Int>(0)
+    let merge = Atomic<Int>(0)
     private let cap: Int
 
     init(capacity: Int = 24) {
@@ -1130,9 +1133,11 @@ final class SignalChain: @unchecked Sendable {
     }
 
     /// Reorder by indices into `all` (a permutation). Safe to call live from the main thread.
-    func reorder(_ indices: [Int]) {
+    func reorder(_ indices: [Int], split: Int? = nil, merge: Int? = nil) {
         let n = min(indices.count, cap)
         for i in 0..<n where indices[i] >= 0 && indices[i] < all.count { order[i] = indices[i] }
+        self.split.store(min(max(split ?? n, 0), n), ordering: .relaxed)
+        self.merge.store(min(max(merge ?? n, 0), n), ordering: .relaxed)
         count.store(n, ordering: .releasing)
     }
 
@@ -1142,5 +1147,11 @@ final class SignalChain: @unchecked Sendable {
     func render(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
         let c = count.load(ordering: .acquiring)
         for i in 0..<c { all[order[i]].render(s, n) }
+    }
+    /// Render a sub-range of the order (dual-path: pre / path A / post).
+    func render(_ s: UnsafeMutablePointer<Float>, _ n: Int, from: Int, to: Int) {
+        let c = count.load(ordering: .acquiring)
+        let a = max(0, min(from, c)), b = max(a, min(to, c))
+        for i in a..<b { all[order[i]].render(s, n) }
     }
 }

@@ -41,6 +41,10 @@ struct Preset: Codable, Identifiable {
     var delayTone = 60.0, delaySync = false, delayDiv: TempoClock.NoteDivision = .eighth, bpm = 0.0
     var wahOn = false, wahPos = 0.5, wahAuto = false, wahSense = 50.0, wahMix = 92.0
     var midiOut: [MIDIOutMessage] = []
+
+    // Dual amp (A ∥ B): second capture + cab, per-path level/pan → stereo
+    var dualOn = false, modelB = "", ampBDrive = 0.0, cabIRB = ""
+    var ampALevel = 0.0, ampBLevel = 0.0, ampAPan = -0.7, ampBPan = 0.7
 }
 
 // Tolerant decoder: every field falls back to its default when a key is absent, so ADDING new
@@ -76,6 +80,8 @@ extension Preset {
         delayTone = g(.delayTone, delayTone); delaySync = g(.delaySync, delaySync); delayDiv = g(.delayDiv, delayDiv); bpm = g(.bpm, bpm)
         wahOn = g(.wahOn, wahOn); wahPos = g(.wahPos, wahPos); wahAuto = g(.wahAuto, wahAuto); wahSense = g(.wahSense, wahSense); wahMix = g(.wahMix, wahMix)
         midiOut = g(.midiOut, midiOut)
+        dualOn = g(.dualOn, dualOn); modelB = g(.modelB, modelB); ampBDrive = g(.ampBDrive, ampBDrive); cabIRB = g(.cabIRB, cabIRB)
+        ampALevel = g(.ampALevel, ampALevel); ampBLevel = g(.ampBLevel, ampBLevel); ampAPan = g(.ampAPan, ampAPan); ampBPan = g(.ampBPan, ampBPan)
     }
 }
 

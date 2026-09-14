@@ -29,6 +29,17 @@ final class RenderContext: @unchecked Sendable {
     // End-of-chain phrase looper (records / plays the final processed tone).
     let looper = LooperEngine()
 
+    // Dual path (A ∥ B). chainB = [ampB, cabB]; chainR = clones of the post-merge blocks for the RIGHT
+    // channel. Mix gains are smoothed (level × equal-power pan, per path per side).
+    let chainB = SignalChain()
+    let chainR = SignalChain()
+    var dualEnabled = false
+    var gAL = Smoother(0.7), gAR = Smoother(0.7), gBL = Smoother(0.7), gBR = Smoother(0.7)
+    let bufB = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
+    let bufR = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
+    let mid = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
+    let midPre = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
+
     // Tier-1 stereo output stage (mono chain → wide stereo). Bit-identical mono when stereoEnabled is false.
     let ping = PingPongDelay()
     let rev = StereoReverb()
@@ -42,10 +53,13 @@ final class RenderContext: @unchecked Sendable {
         analysis.initialize(repeating: 0)
         ppL.initialize(repeating: 0, count: 4096); ppR.initialize(repeating: 0, count: 4096)
         rvL.initialize(repeating: 0, count: 4096); rvR.initialize(repeating: 0, count: 4096)
+        bufB.initialize(repeating: 0, count: 4096); bufR.initialize(repeating: 0, count: 4096)
+        mid.initialize(repeating: 0, count: 4096); midPre.initialize(repeating: 0, count: 4096)
     }
     deinit {
         scratch.deallocate(); analysis.deallocate()
         ppL.deallocate(); ppR.deallocate(); rvL.deallocate(); rvR.deallocate()
+        bufB.deallocate(); bufR.deallocate(); mid.deallocate(); midPre.deallocate()
     }
 }
 
@@ -111,7 +125,8 @@ final class AudioEngine {
 
     /// Copy an external .nam (from Files / a download) into the local library and select it.
     /// If `artworkURL` is given (e.g. a TONE3000 cover), fetch it into a sidecar next to the model.
-    func importModel(from url: URL, artworkURL: String? = nil, gear: String? = nil, asPedal: Bool = false) {
+    enum ModelSlot { case amp, ampB, pedal }
+    func importModel(from url: URL, artworkURL: String? = nil, gear: String? = nil, slot: ModelSlot = .amp) {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         let dest = modelsDir.appendingPathComponent(url.lastPathComponent)
@@ -121,7 +136,11 @@ final class AudioEngine {
         let base = dest.deletingPathExtension().lastPathComponent
         if let gear { try? gear.write(to: modelsDir.appendingPathComponent(base + ".gear"), atomically: true, encoding: .utf8) }
         refreshModels()
-        if asPedal { selectedPedalModelID = dest.lastPathComponent } else { selectedModelID = dest.lastPathComponent }
+        switch slot {
+        case .amp: selectedModelID = dest.lastPathComponent
+        case .ampB: selectedModelBID = dest.lastPathComponent
+        case .pedal: selectedPedalModelID = dest.lastPathComponent
+        }
         if let artworkURL, let aurl = URL(string: artworkURL) {
             let imgDest = modelsDir.appendingPathComponent(base + ".jpg")
             Task { @MainActor in
@@ -175,24 +194,24 @@ final class AudioEngine {
     var inputDriveDb: Double = 0 {
         didSet { amp.inputGain = powf(10, Float(inputDriveDb) / 20); paramDidChange?(.ampDrive, paramNormalized(.ampDrive)) }
     }
-    var pedalEnabled = false { didSet { pedal.bypass.store(!pedalEnabled, ordering: .relaxed) } }
+    var pedalEnabled = false { didSet { for b in pedals { b.bypass.store(!pedalEnabled, ordering: .relaxed) } } }
     var selectedPedalModelID: String? = nil { didSet { if oldValue != selectedPedalModelID { loadPedalModel() } } }
-    var pedalDriveDb: Double = 0 { didSet { pedal.inputGain = powf(10, Float(pedalDriveDb) / 20); paramDidChange?(.pedalDrive, paramNormalized(.pedalDrive)) } }
-    var pedalLevelDb: Double = 0 { didSet { pedal.makeupGain = powf(10, Float(pedalLevelDb) / 20); paramDidChange?(.pedalLevel, paramNormalized(.pedalLevel)) } }
+    var pedalDriveDb: Double = 0 { didSet { for b in pedals { b.inputGain = powf(10, Float(pedalDriveDb) / 20) }; paramDidChange?(.pedalDrive, paramNormalized(.pedalDrive)) } }
+    var pedalLevelDb: Double = 0 { didSet { for b in pedals { b.makeupGain = powf(10, Float(pedalLevelDb) / 20) }; paramDidChange?(.pedalLevel, paramNormalized(.pedalLevel)) } }
     var selectedPedalName: String { selectedPedalModelID.flatMap { id in models.first { $0.id == id }?.name } ?? "None" }
     var gateEnabled = true {
-        didSet { gate.bypass.store(!gateEnabled, ordering: .relaxed) }
+        didSet { for b in gates { b.bypass.store(!gateEnabled, ordering: .relaxed) } }
     }
-    var gateThresholdDb: Double = -34 { didSet { gate.thresholdDb = Float(gateThresholdDb); paramDidChange?(.gateThr, paramNormalized(.gateThr)) } }
-    var gateReleaseMs: Double = 80 { didSet { gate.releaseMs = Float(gateReleaseMs) } }
-    var gateRangeDb: Double = -80 { didSet { gate.rangeDb = Float(gateRangeDb) } }
+    var gateThresholdDb: Double = -34 { didSet { for b in gates { b.thresholdDb = Float(gateThresholdDb) }; paramDidChange?(.gateThr, paramNormalized(.gateThr)) } }
+    var gateReleaseMs: Double = 80 { didSet { for b in gates { b.releaseMs = Float(gateReleaseMs) } } }
+    var gateRangeDb: Double = -80 { didSet { for b in gates { b.rangeDb = Float(gateRangeDb) } } }
 
     // Wah — expression-pedal target (map a CC → MIDIParam.wah) or auto-envelope.
-    var wahEnabled = false { didSet { wah.bypass.store(!wahEnabled, ordering: .relaxed) } }
-    var wahPosition: Double = 0.5 { didSet { wah.position = Float(wahPosition); paramDidChange?(.wah, paramNormalized(.wah)) } }
-    var wahAuto = false { didSet { wah.auto = wahAuto } }
-    var wahSense: Double = 50 { didSet { wah.sensitivity = Float(wahSense / 100) } }
-    var wahMix: Double = 92 { didSet { wah.mix = Float(wahMix / 100) } }
+    var wahEnabled = false { didSet { for b in wahs { b.bypass.store(!wahEnabled, ordering: .relaxed) } } }
+    var wahPosition: Double = 0.5 { didSet { for b in wahs { b.position = Float(wahPosition) }; paramDidChange?(.wah, paramNormalized(.wah)) } }
+    var wahAuto = false { didSet { for b in wahs { b.auto = wahAuto } } }
+    var wahSense: Double = 50 { didSet { for b in wahs { b.sensitivity = Float(wahSense / 100) } } }
+    var wahMix: Double = 92 { didSet { for b in wahs { b.mix = Float(wahMix / 100) } } }
     var outputLevelDb: Double = -6 {
         didSet { if !muted { context.outputGain = powf(10, Float(outputLevelDb) / 20) }; paramDidChange?(.output, paramNormalized(.output)) }
     }
@@ -217,17 +236,17 @@ final class AudioEngine {
     func stopLooper() { context.looper.stopPlayback(); looperStateLabel = context.looper.stateName }
     func clearLooper() { context.looper.clear(); looperStateLabel = context.looper.stateName }
     var eqEnabled = true {
-        didSet { eq.bypass.store(!eqEnabled, ordering: .relaxed) }
+        didSet { for b in eqs { b.bypass.store(!eqEnabled, ordering: .relaxed) } }
     }
     var bassDb: Double = 0 { didSet { updateEQ(); paramDidChange?(.bass, paramNormalized(.bass)) } }
     var midDb: Double = 0 { didSet { updateEQ(); paramDidChange?(.mid, paramNormalized(.mid)) } }
     var trebleDb: Double = 0 { didSet { updateEQ(); paramDidChange?(.treble, paramNormalized(.treble)) } }
 
-    var delayEnabled = false { didSet { delay.bypass.store(!delayEnabled, ordering: .relaxed) } }
-    var delayTimeMs: Double = 350 { didSet { delay.delaySamples = Int(delayTimeMs / 1000 * preferredSampleRate) } }
-    var delayFeedbackPct: Double = 35 { didSet { delay.feedback = Float(delayFeedbackPct / 100); paramDidChange?(.delayFb, paramNormalized(.delayFb)) } }
-    var delayMixPct: Double = 30 { didSet { delay.mix = Float(delayMixPct / 100); paramDidChange?(.delayMix, paramNormalized(.delayMix)) } }
-    var delayTonePct: Double = 60 { didSet { delay.tone = Float(delayTonePct / 100); paramDidChange?(.delayTone, paramNormalized(.delayTone)) } }
+    var delayEnabled = false { didSet { for b in delays { b.bypass.store(!delayEnabled, ordering: .relaxed) } } }
+    var delayTimeMs: Double = 350 { didSet { for b in delays { b.delaySamples = Int(delayTimeMs / 1000 * preferredSampleRate) } } }
+    var delayFeedbackPct: Double = 35 { didSet { for b in delays { b.feedback = Float(delayFeedbackPct / 100) }; paramDidChange?(.delayFb, paramNormalized(.delayFb)) } }
+    var delayMixPct: Double = 30 { didSet { for b in delays { b.mix = Float(delayMixPct / 100) }; paramDidChange?(.delayMix, paramNormalized(.delayMix)) } }
+    var delayTonePct: Double = 60 { didSet { for b in delays { b.tone = Float(delayTonePct / 100) }; paramDidChange?(.delayTone, paramNormalized(.delayTone)) } }
     var compGainReductionDb: Float { comp.gainReductionDb }
 
     // Tap-tempo (Tempo.swift) — when delaySync is on, the delay time follows BPM × note division.
@@ -241,55 +260,55 @@ final class AudioEngine {
     func tapTempo() { tempo.tap(at: ProcessInfo.processInfo.systemUptime); if delaySync { applyTempoToDelay() } }
     private func applyTempoToDelay() { delayTimeMs = min(max(tempo.ms(delayDivision), 50), 1000) }
 
-    var reverbEnabled = false { didSet { reverb.bypass.store(!reverbEnabled, ordering: .relaxed) } }
+    var reverbEnabled = false { didSet { for b in reverbs { b.bypass.store(!reverbEnabled, ordering: .relaxed) } } }
     var reverbDecayPct: Double = 70 { didSet { updateReverb(); paramDidChange?(.reverbDecay, paramNormalized(.reverbDecay)) } }
     var reverbDampPct: Double = 30 { didSet { updateReverb() } }
     var reverbMixPct: Double = 25 { didSet { updateReverb(); paramDidChange?(.reverbMix, paramNormalized(.reverbMix)) } }
 
-    var irReverbEnabled = false { didSet { irReverb.bypass.store(!irReverbEnabled, ordering: .relaxed) } }
-    var irReverbMixPct: Double = 35 { didSet { irReverb.mix = Float(irReverbMixPct / 100) } }
-    var irReverbPredelayMs: Double = 0 { didSet { irReverb.setPredelay(ms: Float(irReverbPredelayMs)) } }
+    var irReverbEnabled = false { didSet { for b in irReverbs { b.bypass.store(!irReverbEnabled, ordering: .relaxed) } } }
+    var irReverbMixPct: Double = 35 { didSet { for b in irReverbs { b.mix = Float(irReverbMixPct / 100) } } }
+    var irReverbPredelayMs: Double = 0 { didSet { for b in irReverbs { b.setPredelay(ms: Float(irReverbPredelayMs)) } } }
     var cabEnabled = true { didSet { cab.bypass.store(!cabEnabled, ordering: .relaxed) } }
 
-    var compEnabled = false { didSet { comp.bypass.store(!compEnabled, ordering: .relaxed) } }
-    var compThresholdDb: Double = -18 { didSet { comp.thresholdDb = Float(compThresholdDb); paramDidChange?(.compThr, paramNormalized(.compThr)) } }
-    var compRatio: Double = 4 { didSet { comp.ratio = Float(compRatio) } }
-    var compAttackMs: Double = 10 { didSet { comp.setTimes(attackMs: Float(compAttackMs), releaseMs: Float(compReleaseMs)) } }
-    var compReleaseMs: Double = 120 { didSet { comp.setTimes(attackMs: Float(compAttackMs), releaseMs: Float(compReleaseMs)) } }
-    var compMakeupDb: Double = 0 { didSet { comp.makeup = powf(10, Float(compMakeupDb) / 20); paramDidChange?(.compMakeup, paramNormalized(.compMakeup)) } }
+    var compEnabled = false { didSet { for b in comps { b.bypass.store(!compEnabled, ordering: .relaxed) } } }
+    var compThresholdDb: Double = -18 { didSet { for b in comps { b.thresholdDb = Float(compThresholdDb) }; paramDidChange?(.compThr, paramNormalized(.compThr)) } }
+    var compRatio: Double = 4 { didSet { for b in comps { b.ratio = Float(compRatio) } } }
+    var compAttackMs: Double = 10 { didSet { for b in comps { b.setTimes(attackMs: Float(compAttackMs), releaseMs: Float(compReleaseMs)) } } }
+    var compReleaseMs: Double = 120 { didSet { for b in comps { b.setTimes(attackMs: Float(compAttackMs), releaseMs: Float(compReleaseMs)) } } }
+    var compMakeupDb: Double = 0 { didSet { for b in comps { b.makeup = powf(10, Float(compMakeupDb) / 20) }; paramDidChange?(.compMakeup, paramNormalized(.compMakeup)) } }
 
-    var driveEnabled = false { didSet { drive.bypass.store(!driveEnabled, ordering: .relaxed) } }
-    var driveAmount: Double = 4 { didSet { drive.drive = Float(driveAmount); paramDidChange?(.driveAmt, paramNormalized(.driveAmt)) } }
-    var driveToneHz: Double = 4000 { didSet { drive.setTone(hz: Float(driveToneHz)) } }
-    var driveLevelDb: Double = 0 { didSet { drive.level = powf(10, Float(driveLevelDb) / 20); paramDidChange?(.driveLevel, paramNormalized(.driveLevel)) } }
+    var driveEnabled = false { didSet { for b in drives { b.bypass.store(!driveEnabled, ordering: .relaxed) } } }
+    var driveAmount: Double = 4 { didSet { for b in drives { b.drive = Float(driveAmount) }; paramDidChange?(.driveAmt, paramNormalized(.driveAmt)) } }
+    var driveToneHz: Double = 4000 { didSet { for b in drives { b.setTone(hz: Float(driveToneHz)) } } }
+    var driveLevelDb: Double = 0 { didSet { for b in drives { b.level = powf(10, Float(driveLevelDb) / 20) }; paramDidChange?(.driveLevel, paramNormalized(.driveLevel)) } }
 
-    var driveMode: Int = 0 { didSet { drive.mode = driveMode } }
+    var driveMode: Int = 0 { didSet { for b in drives { b.mode = driveMode } } }
 
-    var stompEnabled = false { didSet { circuitDrive.bypass.store(!stompEnabled, ordering: .relaxed) } }
-    var stompModel: Int = 0 { didSet { circuitDrive.model = stompModel } }
-    var stompDrive: Double = 0.5 { didSet { circuitDrive.drive = Float(stompDrive); paramDidChange?(.stompDrive, paramNormalized(.stompDrive)) } }
-    var stompTone: Double = 0.5 { didSet { circuitDrive.tone = Float(stompTone) } }
-    var stompLevel: Double = 0.8 { didSet { circuitDrive.level = Float(stompLevel) } }
+    var stompEnabled = false { didSet { for b in circuitDrives { b.bypass.store(!stompEnabled, ordering: .relaxed) } } }
+    var stompModel: Int = 0 { didSet { for b in circuitDrives { b.model = stompModel } } }
+    var stompDrive: Double = 0.5 { didSet { for b in circuitDrives { b.drive = Float(stompDrive) }; paramDidChange?(.stompDrive, paramNormalized(.stompDrive)) } }
+    var stompTone: Double = 0.5 { didSet { for b in circuitDrives { b.tone = Float(stompTone) } } }
+    var stompLevel: Double = 0.8 { didSet { for b in circuitDrives { b.level = Float(stompLevel) } } }
     var stompModelCount: Int { circuitDrive.modelCount }
     func stompModelName(_ i: Int) -> String { circuitDrive.modelName(i) }
 
-    var boostEnabled = false { didSet { boost.bypass.store(!boostEnabled, ordering: .relaxed) } }
-    var boostDb: Double = 6 { didSet { boost.gain = powf(10, Float(boostDb) / 20); paramDidChange?(.boostDb, paramNormalized(.boostDb)) } }
+    var boostEnabled = false { didSet { for b in boosts { b.bypass.store(!boostEnabled, ordering: .relaxed) } } }
+    var boostDb: Double = 6 { didSet { for b in boosts { b.gain = powf(10, Float(boostDb) / 20) }; paramDidChange?(.boostDb, paramNormalized(.boostDb)) } }
 
-    var chorusEnabled = false { didSet { chorus.bypass.store(!chorusEnabled, ordering: .relaxed) } }
-    var chorusRateHz: Double = 0.8 { didSet { chorus.rateHz = Float(chorusRateHz) } }
-    var chorusDepthMs: Double = 6 { didSet { chorus.depthMs = Float(chorusDepthMs) } }
-    var chorusMixPct: Double = 40 { didSet { chorus.mix = Float(chorusMixPct / 100); paramDidChange?(.chorusMix, paramNormalized(.chorusMix)) } }
+    var chorusEnabled = false { didSet { for b in choruses { b.bypass.store(!chorusEnabled, ordering: .relaxed) } } }
+    var chorusRateHz: Double = 0.8 { didSet { for b in choruses { b.rateHz = Float(chorusRateHz) } } }
+    var chorusDepthMs: Double = 6 { didSet { for b in choruses { b.depthMs = Float(chorusDepthMs) } } }
+    var chorusMixPct: Double = 40 { didSet { for b in choruses { b.mix = Float(chorusMixPct / 100) }; paramDidChange?(.chorusMix, paramNormalized(.chorusMix)) } }
 
-    var flangerEnabled = false { didSet { flanger.bypass.store(!flangerEnabled, ordering: .relaxed) } }
-    var flangerRateHz: Double = 0.4 { didSet { flanger.rateHz = Float(flangerRateHz) } }
-    var flangerDepthMs: Double = 2 { didSet { flanger.depthMs = Float(flangerDepthMs) } }
-    var flangerFeedbackPct: Double = 50 { didSet { flanger.feedback = Float(flangerFeedbackPct / 100) } }
-    var flangerMixPct: Double = 50 { didSet { flanger.mix = Float(flangerMixPct / 100); paramDidChange?(.flangerMix, paramNormalized(.flangerMix)) } }
+    var flangerEnabled = false { didSet { for b in flangers { b.bypass.store(!flangerEnabled, ordering: .relaxed) } } }
+    var flangerRateHz: Double = 0.4 { didSet { for b in flangers { b.rateHz = Float(flangerRateHz) } } }
+    var flangerDepthMs: Double = 2 { didSet { for b in flangers { b.depthMs = Float(flangerDepthMs) } } }
+    var flangerFeedbackPct: Double = 50 { didSet { for b in flangers { b.feedback = Float(flangerFeedbackPct / 100) } } }
+    var flangerMixPct: Double = 50 { didSet { for b in flangers { b.mix = Float(flangerMixPct / 100) }; paramDidChange?(.flangerMix, paramNormalized(.flangerMix)) } }
 
-    var tremoloEnabled = false { didSet { tremolo.bypass.store(!tremoloEnabled, ordering: .relaxed) } }
-    var tremoloRateHz: Double = 5 { didSet { tremolo.rateHz = Float(tremoloRateHz) } }
-    var tremoloDepthPct: Double = 50 { didSet { tremolo.depth = Float(tremoloDepthPct / 100); paramDidChange?(.tremoloDepth, paramNormalized(.tremoloDepth)) } }
+    var tremoloEnabled = false { didSet { for b in tremolos { b.bypass.store(!tremoloEnabled, ordering: .relaxed) } } }
+    var tremoloRateHz: Double = 5 { didSet { for b in tremolos { b.rateHz = Float(tremoloRateHz) } } }
+    var tremoloDepthPct: Double = 50 { didSet { for b in tremolos { b.depth = Float(tremoloDepthPct / 100) }; paramDidChange?(.tremoloDepth, paramNormalized(.tremoloDepth)) } }
 
     var reverbType: Int = 3 { didSet { updateReverb() } }   // 0 room · 1 plate · 2 spring · 3 hall (real algorithm)
     func selectReverbType(_ t: Int) {
@@ -303,14 +322,45 @@ final class AudioEngine {
     }
     /// Map the reverb knobs onto whichever real algorithm `reverbType` selects (plate/spring/FDN room+hall).
     private func updateReverb() {
-        reverb.configure(type: reverbType, decayPct: reverbDecayPct, dampPct: reverbDampPct, mixPct: reverbMixPct)
+        for b in reverbs { b.configure(type: reverbType, decayPct: reverbDecayPct, dampPct: reverbDampPct, mixPct: reverbMixPct) }
     }
 
     // Free-order chain — `blockOrder` is a permutation of all block kinds.
     static let defaultOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .cab, .eq, .chorus, .flanger, .tremolo, .delay, .reverb, .irReverb]
     private var indexByKind: [BlockKind: Int] = [:]
     var blockOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .cab, .eq, .chorus, .flanger, .tremolo, .delay, .reverb, .irReverb]
-    func applyOrder() { context.chain.reorder(blockOrder.compactMap { indexByKind[$0] }) }
+    /// Publish the order + the dual-path split/merge points. Path A = the Amp…Cab segment of the chain;
+    /// everything before is common (mono), everything after runs in stereo when dual is on.
+    func applyOrder() {
+        let idx = [blockOrder.firstIndex(of: .amp), blockOrder.firstIndex(of: .cab)].compactMap { $0 }
+        let split = idx.min() ?? blockOrder.count
+        let merge = idx.max().map { $0 + 1 } ?? blockOrder.count
+        context.chain.reorder(blockOrder.compactMap { indexByKind[$0] }, split: split, merge: merge)
+        let post = blockOrder.count > merge ? Array(blockOrder[merge...]) : []
+        context.chainR.reorder(post.filter { $0 != .amp && $0 != .cab }.compactMap { indexByKindR[$0] })
+        context.dualEnabled = dualOn && blockOrder.contains(.amp)
+    }
+
+    // MARK: - Dual amp (A ∥ B)
+
+    var dualOn = false { didSet { applyOrder() } }
+    var selectedModelBID: String = "" { didSet { if oldValue != selectedModelBID { loadModelB() } } }
+    var selectedModelBName: String { models.first { $0.id == selectedModelBID }?.name ?? "None" }
+    var selectedArtworkBPath: String? { models.first { $0.id == selectedModelBID }?.artworkPath }
+    private(set) var modelBStatus = "— empty —"
+    var ampBDriveDb: Double = 0 { didSet { ampB.inputGain = powf(10, Float(ampBDriveDb) / 20); paramDidChange?(.ampBDrive, paramNormalized(.ampBDrive)) } }
+    var ampALevelDb: Double = 0 { didSet { updateDualMix(); paramDidChange?(.ampALevel, paramNormalized(.ampALevel)) } }
+    var ampBLevelDb: Double = 0 { didSet { updateDualMix(); paramDidChange?(.ampBLevel, paramNormalized(.ampBLevel)) } }
+    var ampAPan: Double = -0.7 { didSet { updateDualMix() } }   // −1 L … +1 R
+    var ampBPan: Double = 0.7 { didSet { updateDualMix() } }
+    private(set) var cabBIRName = "None"
+    private var cabBIRFile = ""
+    private func updateDualMix() {
+        let gA = powf(10, Float(ampALevelDb) / 20), gB = powf(10, Float(ampBLevelDb) / 20)
+        let pA = equalPowerPan(Float(ampAPan)), pB = equalPowerPan(Float(ampBPan))
+        context.gAL.target = gA * pA.l; context.gAR.target = gA * pA.r
+        context.gBL.target = gB * pB.l; context.gBR.target = gB * pB.r
+    }
     func setOrder(_ newOrder: [BlockKind]) { blockOrder = newOrder; applyOrder() }
     var availableToAdd: [BlockKind] { BlockKind.allCases.filter { !blockOrder.contains($0) } }
     func addBlock(_ kind: BlockKind) {
@@ -372,6 +422,28 @@ final class AudioEngine {
     private let tremolo = TremoloBlock()
     private let pedal = AmpBlock(kind: .pedal)
     private let irReverb = ReverbIRBlock()
+    // Dual path: B = its own amp + cab. R = clones that process the RIGHT channel after the merge
+    // (every param write goes to both via the plural arrays below; zero cost while dual is off).
+    private let ampB = AmpBlock()
+    private let cabB = CabBlock(kind: .cab)
+    private let gateR = GateBlock(), compR = CompressorBlock(), driveR = DriveBlock(), circuitDriveR = CircuitDriveBlock(kind: .stomp)
+    private let wahR = WahBlock(), eqR = EQBlock(), delayR = DelayBlock(), reverbR = ReverbBlock(), boostR = BoostBlock()
+    private let chorusR = ChorusBlock(), flangerR = FlangerBlock(), tremoloR = TremoloBlock(), pedalR = AmpBlock(kind: .pedal), irReverbR = ReverbIRBlock()
+    private var gates: [GateBlock] { [gate, gateR] }
+    private var comps: [CompressorBlock] { [comp, compR] }
+    private var drives: [DriveBlock] { [drive, driveR] }
+    private var circuitDrives: [CircuitDriveBlock] { [circuitDrive, circuitDriveR] }
+    private var wahs: [WahBlock] { [wah, wahR] }
+    private var pedals: [AmpBlock] { [pedal, pedalR] }
+    private var eqs: [EQBlock] { [eq, eqR] }
+    private var choruses: [ChorusBlock] { [chorus, chorusR] }
+    private var flangers: [FlangerBlock] { [flanger, flangerR] }
+    private var tremolos: [TremoloBlock] { [tremolo, tremoloR] }
+    private var delays: [DelayBlock] { [delay, delayR] }
+    private var reverbs: [ReverbBlock] { [reverb, reverbR] }
+    private var boosts: [BoostBlock] { [boost, boostR] }
+    private var irReverbs: [ReverbIRBlock] { [irReverb, irReverbR] }
+    private var indexByKindR: [BlockKind: Int] = [:]
     private var sinkNode: AVAudioSinkNode?
     private var sourceNode: AVAudioSourceNode?
     private var tunerTimer: Timer?
@@ -387,93 +459,121 @@ final class AudioEngine {
         let chainBlocks: [AudioBlock] = [gate, comp, boost, drive, circuitDrive, wah, pedal, amp, cab, eq, chorus, flanger, tremolo, delay, reverb, irReverb]
         context.chain.install(chainBlocks)
         for (i, b) in chainBlocks.enumerated() { indexByKind[b.kind] = i }
+        let rBlocks: [AudioBlock] = [gateR, compR, boostR, driveR, circuitDriveR, wahR, pedalR, eqR, chorusR, flangerR, tremoloR, delayR, reverbR, irReverbR]
+        context.chainR.install(rBlocks)
+        for (i, b) in rBlocks.enumerated() { indexByKindR[b.kind] = i }
+        context.chainB.install([ampB, cabB])
         applyOrder()
+        updateDualMix()
+        ampB.inputGain = powf(10, Float(ampBDriveDb) / 20)
         context.outputGain = powf(10, Float(outputLevelDb) / 20)
         amp.inputGain = powf(10, Float(inputDriveDb) / 20)
-        gate.thresholdDb = Float(gateThresholdDb); gate.releaseMs = Float(gateReleaseMs); gate.rangeDb = Float(gateRangeDb)
-        wah.bypass.store(!wahEnabled, ordering: .relaxed); wah.position = Float(wahPosition); wah.auto = wahAuto
-        wah.sensitivity = Float(wahSense / 100); wah.mix = Float(wahMix / 100)
+        for b in gates { b.thresholdDb = Float(gateThresholdDb) }; for b in gates { b.releaseMs = Float(gateReleaseMs) }; for b in gates { b.rangeDb = Float(gateRangeDb) }
+        for b in wahs { b.bypass.store(!wahEnabled, ordering: .relaxed) }; for b in wahs { b.position = Float(wahPosition) }; for b in wahs { b.auto = wahAuto }
+        for b in wahs { b.sensitivity = Float(wahSense / 100) }; for b in wahs { b.mix = Float(wahMix / 100) }
         updateEQ()
-        delay.bypass.store(!delayEnabled, ordering: .relaxed)
-        delay.delaySamples = Int(delayTimeMs / 1000 * preferredSampleRate)
-        delay.feedback = Float(delayFeedbackPct / 100)
-        delay.mix = Float(delayMixPct / 100)
-        delay.tone = Float(delayTonePct / 100)
-        reverb.bypass.store(!reverbEnabled, ordering: .relaxed)
+        for b in delays { b.bypass.store(!delayEnabled, ordering: .relaxed) }
+        for b in delays { b.delaySamples = Int(delayTimeMs / 1000 * preferredSampleRate) }
+        for b in delays { b.feedback = Float(delayFeedbackPct / 100) }
+        for b in delays { b.mix = Float(delayMixPct / 100) }
+        for b in delays { b.tone = Float(delayTonePct / 100) }
+        for b in reverbs { b.bypass.store(!reverbEnabled, ordering: .relaxed) }
         updateReverb()
-        comp.bypass.store(!compEnabled, ordering: .relaxed)
-        comp.thresholdDb = Float(compThresholdDb)
-        comp.ratio = Float(compRatio)
-        comp.setTimes(attackMs: Float(compAttackMs), releaseMs: Float(compReleaseMs))
-        comp.makeup = powf(10, Float(compMakeupDb) / 20)
-        drive.bypass.store(!driveEnabled, ordering: .relaxed)
-        drive.drive = Float(driveAmount)
-        drive.setTone(hz: Float(driveToneHz))
-        drive.level = powf(10, Float(driveLevelDb) / 20)
-        drive.mode = driveMode
-        circuitDrive.bypass.store(!stompEnabled, ordering: .relaxed)
-        circuitDrive.model = stompModel; circuitDrive.drive = Float(stompDrive); circuitDrive.tone = Float(stompTone); circuitDrive.level = Float(stompLevel)
-        boost.bypass.store(!boostEnabled, ordering: .relaxed); boost.gain = powf(10, Float(boostDb) / 20)
-        chorus.bypass.store(!chorusEnabled, ordering: .relaxed); chorus.rateHz = Float(chorusRateHz); chorus.depthMs = Float(chorusDepthMs); chorus.mix = Float(chorusMixPct / 100)
-        flanger.bypass.store(!flangerEnabled, ordering: .relaxed); flanger.rateHz = Float(flangerRateHz); flanger.depthMs = Float(flangerDepthMs); flanger.feedback = Float(flangerFeedbackPct / 100); flanger.mix = Float(flangerMixPct / 100)
-        tremolo.bypass.store(!tremoloEnabled, ordering: .relaxed); tremolo.rateHz = Float(tremoloRateHz); tremolo.depth = Float(tremoloDepthPct / 100)
-        pedal.bypass.store(!pedalEnabled, ordering: .relaxed); pedal.inputGain = powf(10, Float(pedalDriveDb) / 20); pedal.makeupGain = powf(10, Float(pedalLevelDb) / 20)
-        irReverb.bypass.store(!irReverbEnabled, ordering: .relaxed); irReverb.mix = Float(irReverbMixPct / 100)
+        for b in comps { b.bypass.store(!compEnabled, ordering: .relaxed) }
+        for b in comps { b.thresholdDb = Float(compThresholdDb) }
+        for b in comps { b.ratio = Float(compRatio) }
+        for b in comps { b.setTimes(attackMs: Float(compAttackMs), releaseMs: Float(compReleaseMs)) }
+        for b in comps { b.makeup = powf(10, Float(compMakeupDb) / 20) }
+        for b in drives { b.bypass.store(!driveEnabled, ordering: .relaxed) }
+        for b in drives { b.drive = Float(driveAmount) }
+        for b in drives { b.setTone(hz: Float(driveToneHz)) }
+        for b in drives { b.level = powf(10, Float(driveLevelDb) / 20) }
+        for b in drives { b.mode = driveMode }
+        for b in circuitDrives { b.bypass.store(!stompEnabled, ordering: .relaxed) }
+        for b in circuitDrives { b.model = stompModel }; for b in circuitDrives { b.drive = Float(stompDrive) }; for b in circuitDrives { b.tone = Float(stompTone) }; for b in circuitDrives { b.level = Float(stompLevel) }
+        for b in boosts { b.bypass.store(!boostEnabled, ordering: .relaxed) }; for b in boosts { b.gain = powf(10, Float(boostDb) / 20) }
+        for b in choruses { b.bypass.store(!chorusEnabled, ordering: .relaxed) }; for b in choruses { b.rateHz = Float(chorusRateHz) }; for b in choruses { b.depthMs = Float(chorusDepthMs) }; for b in choruses { b.mix = Float(chorusMixPct / 100) }
+        for b in flangers { b.bypass.store(!flangerEnabled, ordering: .relaxed) }; for b in flangers { b.rateHz = Float(flangerRateHz) }; for b in flangers { b.depthMs = Float(flangerDepthMs) }; for b in flangers { b.feedback = Float(flangerFeedbackPct / 100) }; for b in flangers { b.mix = Float(flangerMixPct / 100) }
+        for b in tremolos { b.bypass.store(!tremoloEnabled, ordering: .relaxed) }; for b in tremolos { b.rateHz = Float(tremoloRateHz) }; for b in tremolos { b.depth = Float(tremoloDepthPct / 100) }
+        for b in pedals { b.bypass.store(!pedalEnabled, ordering: .relaxed) }; for b in pedals { b.inputGain = powf(10, Float(pedalDriveDb) / 20) }; for b in pedals { b.makeupGain = powf(10, Float(pedalLevelDb) / 20) }
+        for b in irReverbs { b.bypass.store(!irReverbEnabled, ordering: .relaxed) }; for b in irReverbs { b.mix = Float(irReverbMixPct / 100) }
         loadPedalModel()
     }
 
-    private func updateEQ() { eq.setBands(bass: Float(bassDb), mid: Float(midDb), treble: Float(trebleDb)) }
+    private func updateEQ() { for b in eqs { b.setBands(bass: Float(bassDb), mid: Float(midDb), treble: Float(trebleDb)) } }
 
     static func toDb(_ x: Float) -> Float { x > 1e-6 ? 20 * log10(x) : -120 }
 
     // MARK: - Model
 
+    /// Load a capture + level-match it. Prefers the trainer's own loudness metadata (target −18 dB,
+    /// like the official plugin); falls back to a sine probe. Makeup is capped at +12 dB either way —
+    /// a quiet capture boosted +36 dB is pure hiss.
+    private func loadNAM(path: String) throws -> (model: NAMModel, makeupDb: Double, how: String) {
+        let model = NAMModel()
+        try model.loadModel(fromPath: path)
+        model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
+        var makeupDb: Double
+        let how: String
+        if model.loudness.isFinite {
+            makeupDb = -18 - model.loudness; how = "loudness \(String(format: "%.1f", model.loudness)) dB"
+        } else {
+            let probe = selfTest(model)
+            model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
+            makeupDb = probe.nan ? 0 : Double(20 * log10(0.4 / max(probe.peak, 1e-4))); how = "probe"
+        }
+        return (model, max(-24, min(12, makeupDb)), how)
+    }
+
     func loadModel() {
         guard let tm = models.first(where: { $0.id == selectedModelID }) ?? models.first else {
             modelStatus = "❌ no models found"; amp.setModel(nil); return
         }
-        let model = NAMModel()
         do {
-            try model.loadModel(fromPath: tm.path)
-            model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
-            // Level-match without amplifying the noise floor: prefer the trainer's own loudness
-            // metadata (target −18 dB, like the official plugin); fall back to a sine probe. Makeup
-            // is capped at +12 dB either way — a quiet capture boosted +36 dB is pure hiss.
-            var makeupDb: Double
-            let how: String
-            if model.loudness.isFinite {
-                makeupDb = -18 - model.loudness; how = "loudness \(String(format: "%.1f", model.loudness)) dB"
-            } else {
-                let probe = selfTest(model)
-                model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
-                makeupDb = probe.nan ? 0 : Double(20 * log10(0.4 / max(probe.peak, 1e-4))); how = "probe"
-            }
-            makeupDb = max(-24, min(12, makeupDb))
-            amp.setModel(model)
-            amp.makeupGain = powf(10, Float(makeupDb) / 20)
-            modelStatus = "\(tm.name) · \(how) · trim \(String(format: "%+.0f", makeupDb)) dB"
+            let r = try loadNAM(path: tm.path)
+            amp.setModel(r.model)
+            amp.makeupGain = powf(10, Float(r.makeupDb) / 20)
+            modelStatus = "\(tm.name) · \(r.how) · trim \(String(format: "%+.0f", r.makeupDb)) dB"
         } catch {
             amp.setModel(nil)
             modelStatus = "❌ Load failed: \(error.localizedDescription)"
         }
     }
 
+    func loadModelB() {
+        guard !selectedModelBID.isEmpty, let tm = models.first(where: { $0.id == selectedModelBID }) else {
+            ampB.setModel(nil); modelBStatus = "— empty —"; return
+        }
+        do {
+            let r = try loadNAM(path: tm.path)
+            ampB.setModel(r.model)
+            ampB.makeupGain = powf(10, Float(r.makeupDb) / 20)
+            modelBStatus = "\(tm.name) · trim \(String(format: "%+.0f", r.makeupDb)) dB"
+        } catch {
+            ampB.setModel(nil)
+            modelBStatus = "❌ Load failed"
+        }
+    }
+
     /// Load the pedal-slot capture (a 2nd neural model in front of the amp). No auto-level — the
-    /// user sets Drive/Level so the pedal hits the amp the way they want.
+    /// user sets Drive/Level so the pedal hits the amp the way they want. Two instances: one per
+    /// channel (a NAM model carries state, so L and R can't share one).
     func loadPedalModel() {
         guard let id = selectedPedalModelID, !id.isEmpty,
               let tm = models.first(where: { $0.id == id }) else {
-            pedal.setModel(nil); pedalStatus = "— empty —"; return
+            for b in pedals { b.setModel(nil) }; pedalStatus = "— empty —"; return
         }
-        let model = NAMModel()
         do {
-            try model.loadModel(fromPath: tm.path)
-            model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
-            pedal.setModel(model)
-            pedal.makeupGain = powf(10, Float(pedalLevelDb) / 20)
+            for b in pedals {
+                let model = NAMModel()
+                try model.loadModel(fromPath: tm.path)
+                model.prepare(withSampleRate: preferredSampleRate, maxBlockSize: 4096)
+                b.setModel(model)
+                b.makeupGain = powf(10, Float(pedalLevelDb) / 20)
+            }
             pedalStatus = tm.name
         } catch {
-            pedal.setModel(nil)
+            for b in pedals { b.setModel(nil) }
             pedalStatus = "❌ Load failed"
         }
     }
@@ -501,6 +601,27 @@ final class AudioEngine {
             cabIRFile = file; cabIRName = url.deletingPathExtension().lastPathComponent; cab.setIR(taps)
         } else { clearCabIR() }
     }
+    func loadCabBIR(from url: URL) {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        guard let taps = Self.loadIRSamples(url, targetSR: preferredSampleRate), !taps.isEmpty else {
+            modelBStatus = "❌ Cab IR load failed"; return
+        }
+        let dest = irsDir.appendingPathComponent(url.lastPathComponent)
+        try? FileManager.default.removeItem(at: dest)
+        try? FileManager.default.copyItem(at: url, to: dest)
+        cabBIRFile = url.lastPathComponent
+        cabBIRName = url.deletingPathExtension().lastPathComponent
+        cabB.setIR(taps)
+    }
+    func clearCabBIR() { cabBIRFile = ""; cabBIRName = "None"; cabB.clearIR() }
+    private func applyCabBIR(_ file: String) {
+        guard !file.isEmpty else { clearCabBIR(); return }
+        let url = irsDir.appendingPathComponent(file)
+        if let taps = Self.loadIRSamples(url, targetSR: preferredSampleRate), !taps.isEmpty {
+            cabBIRFile = file; cabBIRName = url.deletingPathExtension().lastPathComponent; cabB.setIR(taps)
+        } else { clearCabBIR() }
+    }
     func loadReverbIR(from url: URL) {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -512,14 +633,14 @@ final class AudioEngine {
         try? FileManager.default.copyItem(at: url, to: dest)
         irReverbFile = url.lastPathComponent
         irReverbName = url.deletingPathExtension().lastPathComponent
-        irReverb.setIR(taps)
+        for b in irReverbs { b.setIR(taps) }
     }
-    func clearReverbIR() { irReverbFile = ""; irReverbName = "None"; irReverb.clearIR() }
+    func clearReverbIR() { irReverbFile = ""; irReverbName = "None"; for b in irReverbs { b.clearIR() } }
     private func applyReverbIR(_ file: String) {
         guard !file.isEmpty else { clearReverbIR(); return }
         let url = irsDir.appendingPathComponent(file)
         if let taps = Self.loadReverbIRSamples(url, targetSR: preferredSampleRate), !taps.isEmpty {
-            irReverbFile = file; irReverbName = url.deletingPathExtension().lastPathComponent; irReverb.setIR(taps)
+            irReverbFile = file; irReverbName = url.deletingPathExtension().lastPathComponent; for b in irReverbs { b.setIR(taps) }
         } else { clearReverbIR() }
     }
     /// Reverb IR loader — long (≤64000 taps ≈ 1.3 s) and L2/energy-normalized (consistent loudness vs length).
@@ -626,6 +747,7 @@ final class AudioEngine {
         case .chorusMix: chorusMixPct = v;  case .flangerMix: flangerMixPct = v; case .tremoloDepth: tremoloDepthPct = v
         case .wah: wahPosition = v;         case .delayTone: delayTonePct = v;  case .compThr: compThresholdDb = v
         case .stompDrive: stompDrive = v;   case .loopLevel: loopLevel = v
+        case .ampBDrive: ampBDriveDb = v;   case .ampALevel: ampALevelDb = v;  case .ampBLevel: ampBLevelDb = v
         }
     }
     /// Current value of a MIDI-mappable param, normalized 0…1 (for controller feedback / MIDI out).
@@ -643,6 +765,7 @@ final class AudioEngine {
         case .chorusMix: v = chorusMixPct;  case .flangerMix: v = flangerMixPct; case .tremoloDepth: v = tremoloDepthPct
         case .wah: v = wahPosition;         case .delayTone: v = delayTonePct;  case .compThr: v = compThresholdDb
         case .stompDrive: v = stompDrive;   case .loopLevel: v = loopLevel
+        case .ampBDrive: v = ampBDriveDb;   case .ampALevel: v = ampALevelDb;  case .ampBLevel: v = ampBLevelDb
         }
         return max(0, min(1, (v - r.lowerBound) / (r.upperBound - r.lowerBound)))
     }
@@ -715,13 +838,15 @@ final class AudioEngine {
         p.gateRel = gateReleaseMs; p.gateRange = gateRangeDb
         p.delayTone = delayTonePct; p.delaySync = delaySync; p.delayDiv = delayDivision; p.bpm = tempo.bpm
         p.wahOn = wahEnabled; p.wahPos = wahPosition; p.wahAuto = wahAuto; p.wahSense = wahSense; p.wahMix = wahMix
+        p.dualOn = dualOn; p.modelB = selectedModelBID; p.ampBDrive = ampBDriveDb; p.cabIRB = cabBIRFile
+        p.ampALevel = ampALevelDb; p.ampBLevel = ampBLevelDb; p.ampAPan = ampAPan; p.ampBPan = ampBPan
         if presets.indices.contains(currentPresetIndex) { p.midiOut = presets[currentPresetIndex].midiOut }
         return p
     }
     private func apply(_ p: Preset) {
         // A preset load moves every param at once — don't spray CC feedback for each one.
         let feedback = paramDidChange; paramDidChange = nil
-        defer { paramDidChange = feedback; delay.snapTime() }
+        defer { paramDidChange = feedback; for b in delays { b.snapTime() } }
         let changed = p.model != selectedModelID
         selectedModelID = p.model
         if !changed { loadModel() }   // same model → didSet didn't reload; force it
@@ -756,6 +881,12 @@ final class AudioEngine {
         if p.bpm > 0 { tempo.bpm = p.bpm }
         delayDivision = p.delayDiv; delaySync = p.delaySync
         wahEnabled = p.wahOn; wahPosition = p.wahPos; wahAuto = p.wahAuto; wahSense = p.wahSense; wahMix = p.wahMix
+        ampBDriveDb = p.ampBDrive; ampALevelDb = p.ampALevel; ampBLevelDb = p.ampBLevel; ampAPan = p.ampAPan; ampBPan = p.ampBPan
+        let changedB = p.modelB != selectedModelBID
+        selectedModelBID = p.modelB
+        if !changedB { loadModelB() }
+        applyCabBIR(p.cabIRB)
+        dualOn = p.dualOn
     }
 
     // MARK: - Audio
@@ -843,6 +974,11 @@ final class AudioEngine {
         context.ring.reset()
         context.chain.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
         context.chain.reset()
+        context.chainB.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096); context.chainB.reset()
+        context.chainR.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096); context.chainR.reset()
+        context.gAL.prepare(sampleRate: inputFormat.sampleRate, ms: 10); context.gAR.prepare(sampleRate: inputFormat.sampleRate, ms: 10)
+        context.gBL.prepare(sampleRate: inputFormat.sampleRate, ms: 10); context.gBR.prepare(sampleRate: inputFormat.sampleRate, ms: 10)
+        context.gAL.snap(); context.gAR.snap(); context.gBL.snap(); context.gBR.snap()
         context.looper.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
         context.ping.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
         context.rev.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
@@ -884,6 +1020,60 @@ final class AudioEngine {
             context.analysisW = aw
             context.inPeak = inP
 
+            let out = UnsafeMutableAudioBufferListPointer(ablPtr)
+            let split = context.chain.split.load(ordering: .relaxed), merge = context.chain.merge.load(ordering: .relaxed)
+
+            if context.dualEnabled, split < merge {
+                // ---- Dual path: pre (mono) → A ∥ B → L/R mix → post in stereo → looper on mid → out ----
+                let bB = context.bufB, R = context.bufR, mid = context.mid, midPre = context.midPre
+                context.chain.render(s, n, from: 0, to: split)             // common pre
+                memcpy(bB, s, n * MemoryLayout<Float>.size)
+                context.chain.render(s, n, from: split, to: merge)         // path A (amp → cab)
+                context.chainB.render(bB, n)                               // path B (amp B → cab B)
+                for i in 0..<n {
+                    let a = s[i], b = bB[i]
+                    let l = a * context.gAL.next() + b * context.gBL.next()
+                    R[i] = a * context.gAR.next() + b * context.gBR.next()
+                    s[i] = l
+                }
+                context.chain.render(s, n, from: merge, to: Int.max)       // post, left
+                context.chainR.render(R, n)                                // post, right (clones)
+                for i in 0..<n { mid[i] = 0.5 * (s[i] + R[i]) }
+                memcpy(midPre, mid, n * MemoryLayout<Float>.size)
+                context.looper.process(mid, n)                             // loop = the mid; playback added to both sides
+                for i in 0..<n { let d = mid[i] - midPre[i]; s[i] += d; R[i] += d; mid[i] = 0.5 * (s[i] + R[i]) }
+
+                var outP: Float = 0
+                for i in 0..<n { let a = max(abs(s[i]), abs(R[i])); if a.isFinite && a > outP { outP = a } }
+                context.outPeak = outP
+
+                if context.stereoEnabled {
+                    context.ping.processStereo(mid, context.ppL, context.ppR, n)
+                    context.rev.processStereo(mid, context.rvL, context.rvR, n)
+                } else {
+                    for i in 0..<n { context.ppL[i] = 0; context.ppR[i] = 0; context.rvL[i] = 0; context.rvR[i] = 0 }
+                }
+                if out.count >= 2, let dL = out[0].mData?.assumingMemoryBound(to: Float.self), let dR = out[1].mData?.assumingMemoryBound(to: Float.self) {
+                    for i in 0..<n {
+                        let og = context.outSm.next()
+                        var l = (s[i] + context.ppL[i] + context.rvL[i]) * og
+                        var r = (R[i] + context.ppR[i] + context.rvR[i]) * og
+                        if !l.isFinite { l = 0 } else if l > 1 { l = 1 } else if l < -1 { l = -1 }
+                        if !r.isFinite { r = 0 } else if r > 1 { r = 1 } else if r < -1 { r = -1 }
+                        dL[i] = l; dR[i] = r
+                    }
+                } else if let d0 = out.first?.mData?.assumingMemoryBound(to: Float.self) {
+                    for i in 0..<n {
+                        var v = mid[i] * context.outSm.next()
+                        if !v.isFinite { v = 0 } else if v > 1 { v = 1 } else if v < -1 { v = -1 }
+                        d0[i] = v
+                    }
+                }
+                let bufNs = Double(n) / context.sr * 1e9
+                if bufNs > 0 { context.cpuLoad = context.cpuLoad * 0.9 + Float(Double(DispatchTime.now().uptimeNanoseconds - t0) / bufNs) * 0.1 }
+                return noErr
+            }
+
             // The block chain (mono).
             context.chain.render(s, n)
             context.looper.process(s, n)   // end-of-chain looper: record / play the final tone
@@ -894,7 +1084,6 @@ final class AudioEngine {
 
             // Output stage: mono → (optional) wide stereo. Wet-only ping-pong + decorrelated reverb summed
             // on top of the centered dry; bit-identical mono on both channels when stereo is OFF.
-            let out = UnsafeMutableAudioBufferListPointer(ablPtr)
             if context.stereoEnabled, out.count >= 2,
                let dL = out[0].mData?.assumingMemoryBound(to: Float.self),
                let dR = out[1].mData?.assumingMemoryBound(to: Float.self) {

@@ -142,6 +142,23 @@ nonisolated func check(_ ok: Bool, _ msg: String) { print((ok ? "  ✓ " : "  �
             check(heel < mid && mid < toe, "resonance sweeps \(Int(heel)) → \(Int(mid)) → \(Int(toe)) Hz")
         }
 
+        print("SignalChain split/merge (dual path)")
+        do {
+            let b2 = BoostBlock(), b3 = BoostBlock(), b5 = BoostBlock()
+            for b in [b2, b3, b5] { b.prepare(sampleRate: sr, maxBlock: 64) }
+            b2.gain = 2; b3.gain = 3; b5.gain = 5; for b in [b2, b3, b5] { b.reset() }
+            let ch = SignalChain(); ch.install([b2, b3, b5])
+            ch.reorder([0, 1, 2], split: 1, merge: 2)
+            func one(_ f: (UnsafeMutablePointer<Float>) -> Void) -> Float { var v: Float = 1; withUnsafeMutablePointer(to: &v) { f($0) }; return v }
+            check(one { ch.render($0, 1, from: 0, to: ch.split.load(ordering: .relaxed)) } == 2, "pre = blocks before split")
+            check(one { ch.render($0, 1, from: 1, to: 2) } == 3, "path A = [split, merge)")
+            check(one { ch.render($0, 1, from: 2, to: Int.max) } == 5, "post = [merge, end) with open upper bound")
+            check(one { ch.render($0, 1) } == 30, "full render unchanged")
+            ch.reorder([2, 1, 0], split: 0, merge: 99)
+            check(ch.merge.load(ordering: .relaxed) == 3, "merge clamps to count")
+            check(one { ch.render($0, 1, from: 0, to: 3) } == 30, "reordered full range")
+        }
+
         print("Smoother")
         do {
             var s = Smoother(0); s.prepare(sampleRate: sr, ms: 5); s.snap(); s.target = 1

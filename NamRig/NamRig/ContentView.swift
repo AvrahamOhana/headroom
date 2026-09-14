@@ -70,6 +70,8 @@ struct ContentView: View {
     @AppStorage("uiAppearance") private var uiAppearance = 0   // 0 system · 1 light · 2 dark
     @State private var showImporter = false
     @State private var showIRImporter = false
+    @State private var showIRImporterB = false
+    @State private var showImporterB = false
     @State private var showRevIRImporter = false
     @State private var t3kBrowse: T3KBrowser.Target? = nil   // non-nil → present browser for that slot
     @State private var showManage = false
@@ -129,6 +131,12 @@ struct ContentView: View {
         }
         .fileImporter(isPresented: $showIRImporter, allowedContentTypes: [.wav, .aiff, .audio]) { result in
             if case .success(let url) = result { audio.loadCabIR(from: url) }
+        }
+        .fileImporter(isPresented: $showIRImporterB, allowedContentTypes: [.wav, .aiff, .audio]) { result in
+            if case .success(let url) = result { audio.loadCabBIR(from: url) }
+        }
+        .fileImporter(isPresented: $showImporterB, allowedContentTypes: [UTType(filenameExtension: "nam") ?? .data]) { result in
+            if case .success(let url) = result { audio.importModel(from: url, slot: .ampB) }
         }
         .fileImporter(isPresented: $showRevIRImporter, allowedContentTypes: [.wav, .aiff, .audio]) { result in
             if case .success(let url) = result { audio.loadReverbIR(from: url) }
@@ -244,7 +252,7 @@ struct ContentView: View {
         return Button { selected = (selected == block ? nil : block); outputSelected = false } label: {
             VStack(spacing: 6) {
                 Image(systemName: block.icon).font(.system(size: 20, weight: .semibold))
-                Text(block.short).font(.system(size: 10, weight: .heavy))
+                Text((block == .amp || block == .cab) && audio.dualOn ? block.short + " A|B" : block.short).font(.system(size: 10, weight: .heavy))
             }
             .frame(width: 58, height: 74)
             .foregroundStyle(on ? .white : .white.opacity(0.3))
@@ -387,11 +395,14 @@ struct ContentView: View {
             }
             Text(audio.modelStatus).font(.caption).foregroundStyle(.secondary)
             HStack(alignment: .top, spacing: 14) {
-                Knob(label: "Drive", value: $audio.inputDriveDb, range: 0...24, unit: "dB", color: c, defaultValue: 0, size: 72)
+                Knob(label: audio.dualOn ? "Drive A" : "Drive", value: $audio.inputDriveDb, range: 0...24, unit: "dB", color: c, defaultValue: 0, size: 72)
                 TimelineView(.periodic(from: .now, by: 0.08)) { _ in
                     VStack(spacing: 8) { meter("In", audio.inPeakDb); meter("Out", audio.outPeakDb) }
                 }
             }
+            Divider().overlay(.secondary.opacity(0.2))
+            Toggle(isOn: $audio.dualOn) { Label("Dual Amp  A ∥ B → stereo", systemImage: "rectangle.split.2x1").font(.subheadline.bold()) }.tint(c)
+            if audio.dualOn { dualAmpSection(c) }
         case .pedal:
             if let art = audio.selectedPedalArtworkPath, let img = Image(file: art) {
                 RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.25))
@@ -460,7 +471,19 @@ struct ContentView: View {
                 Button { t3kBrowse = .cab } label: { Label("Browse", systemImage: "magnifyingglass") }.font(.subheadline)
                 Button { showIRImporter = true } label: { Label("File", systemImage: "square.and.arrow.down") }.font(.subheadline)
             }
-            Text("Speaker cabinet IR. Browse TONE3000 cabs or load your own .wav / .aiff.")
+            if audio.dualOn {
+                HStack(spacing: 8) {
+                    Image(systemName: "hifispeaker.2.fill").foregroundStyle(.secondary)
+                    Text("B: " + audio.cabBIRName).font(.subheadline).lineLimit(1)
+                    Spacer()
+                    if audio.cabBIRName != "None" {
+                        Button { audio.clearCabBIR() } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    }
+                    Button { t3kBrowse = .cabB } label: { Label("Browse", systemImage: "magnifyingglass") }.font(.subheadline)
+                    Button { showIRImporterB = true } label: { Label("File", systemImage: "square.and.arrow.down") }.font(.subheadline)
+                }
+            }
+            Text(audio.dualOn ? "Cab A feeds path A, Cab B feeds path B. Browse TONE3000 cabs or load your own .wav / .aiff." : "Speaker cabinet IR. Browse TONE3000 cabs or load your own .wav / .aiff.")
                 .font(.caption2).foregroundStyle(.secondary)
         case .delay:
             Toggle("Tempo Sync", isOn: $audio.delaySync).tint(.purple).font(.subheadline)
@@ -506,6 +529,50 @@ struct ContentView: View {
                 Knob(label: "Predelay", value: $audio.irReverbPredelayMs, range: 0...200, unit: "ms", color: c, defaultValue: 0)
                 Knob(label: "Mix", value: $audio.irReverbMixPct, range: 0...100, unit: "%", color: c, defaultValue: 35)
             }
+        }
+    }
+
+    /// Path B (second capture + its drive) and the A/B mixer.
+    private func dualAmpSection(_ c: Color) -> some View {
+        VStack(spacing: 10) {
+            if let art = audio.selectedArtworkBPath, let img = Image(file: art) {
+                RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.25))
+                    .frame(maxWidth: .infinity).frame(height: 110)
+                    .overlay { img.resizable().interpolation(.high).scaledToFit().padding(8) }
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .allowsHitTesting(false)
+            }
+            Menu {
+                Button { audio.selectedModelBID = "" } label: { Label("None (empty)", systemImage: audio.selectedModelBID.isEmpty ? "checkmark" : "nosign") }
+                ForEach(audio.ampModels) { m in
+                    Button { audio.selectedModelBID = m.id } label: {
+                        Label(m.name, systemImage: m.id == audio.selectedModelBID ? "checkmark" : (m.bundled ? "shippingbox" : "tray.and.arrow.down"))
+                    }
+                }
+                Divider()
+                Button { showImporterB = true } label: { Label("Import .nam…", systemImage: "square.and.arrow.down") }
+                Button { t3kBrowse = .ampB } label: { Label("Browse TONE3000…", systemImage: "magnifyingglass") }
+            } label: {
+                HStack {
+                    Text("B").font(.caption.bold()).padding(.horizontal, 6).padding(.vertical, 2).background(c.opacity(0.35), in: Capsule())
+                    Image(systemName: "amplifier")
+                    Text(audio.selectedModelBName).fontWeight(.semibold)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down").font(.caption)
+                }
+                .padding(.vertical, 8).padding(.horizontal, 12)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            }
+            Text(audio.modelBStatus).font(.caption).foregroundStyle(.secondary)
+            KnobGrid {
+                Knob(label: "Drive B", value: $audio.ampBDriveDb, range: 0...24, unit: "dB", color: c, defaultValue: 0)
+                Knob(label: "Level A", value: $audio.ampALevelDb, range: -24...12, unit: "dB", color: c, defaultValue: 0)
+                Knob(label: "Level B", value: $audio.ampBLevelDb, range: -24...12, unit: "dB", color: c, defaultValue: 0)
+                Knob(label: "Pan A", value: $audio.ampAPan, range: -1...1, unit: "", decimals: 2, color: c, defaultValue: -0.7, bipolar: true)
+                Knob(label: "Pan B", value: $audio.ampBPan, range: -1...1, unit: "", decimals: 2, color: c, defaultValue: 0.7, bipolar: true)
+            }
+            Text("Split before the Amp, merge after the Cab. Everything after runs in stereo. Cab B lives in the CAB block. ~2× CPU while on.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 

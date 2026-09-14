@@ -33,6 +33,8 @@ struct T3KTone: Codable, Identifiable {
     var downloads_count: Int?
     var favorites_count: Int?
     var is_favorited: Bool?
+    var is_favorite: Bool?
+    var isFav: Bool { is_favorite ?? is_favorited ?? false }
     var calibrated: Bool?
     var verified: Bool?
 
@@ -46,7 +48,9 @@ struct T3KModel: Codable, Identifiable {
     let name: String
     let model_url: String
     var size: String?
+    var architecture_version: String?
     var architecture: String?
+    var arch: String? { architecture_version ?? architecture }
 }
 
 struct T3KProfile: Codable { let username: String?; let avatar_url: String?; let tones_count: Int?; let favorites_count: Int? }
@@ -256,6 +260,9 @@ final class T3KClient: NSObject, ASWebAuthenticationPresentationContextProviding
                 if (resp as? HTTPURLResponse)?.statusCode == 401 { logout() }
             } else { logout() }
         }
+        if let code = (resp as? HTTPURLResponse)?.statusCode, code >= 400, code != 429 {
+            throw NSError(domain: "T3K", code: code, userInfo: [NSLocalizedDescriptionKey: "TONE3000 error \(code)"])
+        }
         if (resp as? HTTPURLResponse)?.statusCode == 429 {
             throw NSError(domain: "T3K", code: 429, userInfo: [NSLocalizedDescriptionKey: "TONE3000 rate limit — wait a minute and try again."])
         }
@@ -300,7 +307,7 @@ private let t3kArchs: [(String, String)] = [("A2", "2"), ("A1", "1"), ("Custom",
 private let t3kSorts: [(String, String)] = [("Best match", "best-match"), ("Trending", "trending"), ("Newest", "newest"), ("Most downloaded", "downloads-all-time"), ("Oldest", "oldest")]
 
 struct T3KBrowser: View {
-    enum Target: Identifiable { case amp, pedal, cab; var id: Self { self } }
+    enum Target: Identifiable { case amp, ampB, pedal, cab, cabB; var id: Self { self } }
     enum Tab: String, CaseIterable, Identifiable { case search = "Search", trending = "Trending", favorites = "Favorites", mine = "Mine", downloaded = "Downloaded"; var id: Self { self } }
     let audio: AudioEngine
     let target: Target
@@ -317,8 +324,9 @@ struct T3KBrowser: View {
     init(audio: AudioEngine, target: Target = .amp) {
         self.audio = audio
         self.target = target
-        _gear = State(initialValue: target == .pedal ? "pedal" : (target == .cab ? "cab" : "amp-cab"))
-        _arch = State(initialValue: target == .cab ? "" : "2")   // cab IRs have no NAM architecture
+        let isCab = target == .cab || target == .cabB
+        _gear = State(initialValue: target == .pedal ? "pedal" : (isCab ? "cab" : "amp-cab"))
+        _arch = State(initialValue: isCab ? "" : "2")   // cab IRs have no NAM architecture
     }
     @State private var tones: [T3KTone] = []
     @State private var loading = false
@@ -348,6 +356,7 @@ struct T3KBrowser: View {
                 }
             }
         }
+        .sheetSize([.large], mac: CGSize(width: 760, height: 820))
         .task {
             if client.isLoggedIn {
                 if client.profile == nil { await client.loadProfile() }
@@ -376,7 +385,7 @@ struct T3KBrowser: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     filterMenu(title: t3kGears.first { $0.1 == gear }?.0 ?? "Gear", options: t3kGears) { gear = $1; Task { await search() } }
-                    if target != .cab {
+                    if target != .cab && target != .cabB {
                         filterMenu(title: "Arch: \(t3kArchs.first { $0.1 == arch }?.0 ?? "Any")", options: t3kArchs) { arch = $1; Task { await search() } }
                     }
                     if tab == .search {
@@ -396,7 +405,7 @@ struct T3KBrowser: View {
                     } label: { toneRow(tone) }
                     .swipeActions(edge: .trailing) {
                         Button { toggleFavorite(tone) } label: {
-                            Label(tone.is_favorited == true ? "Unfavorite" : "Favorite", systemImage: tone.is_favorited == true ? "heart.slash" : "heart")
+                            Label(tone.isFav ? "Unfavorite" : "Favorite", systemImage: tone.isFav ? "heart.slash" : "heart")
                         }.tint(.pink)
                     }
                     .onAppear { if canLoadMore, tone.id == tones.last?.id { Task { await loadMore() } } }
@@ -428,7 +437,7 @@ struct T3KBrowser: View {
                     if let g = tone.gear { Text(g.uppercased()).font(.system(size: 9, weight: .heavy)).padding(.horizontal, 5).padding(.vertical, 1).background(.quaternary, in: Capsule()) }
                     if let u = tone.user?.username { Label(u, systemImage: "person.fill").font(.caption2) }
                     if let d = tone.downloads_count { Label("\(d)", systemImage: "arrow.down").font(.caption2) }
-                    if let f = tone.favorites_count { Label("\(f)", systemImage: tone.is_favorited == true ? "heart.fill" : "heart").font(.caption2).foregroundStyle(tone.is_favorited == true ? .pink : .secondary) }
+                    if let f = tone.favorites_count { Label("\(f)", systemImage: tone.isFav ? "heart.fill" : "heart").font(.caption2).foregroundStyle(tone.isFav ? .pink : .secondary) }
                 }
                 .foregroundStyle(.secondary)
             }
@@ -455,17 +464,17 @@ struct T3KBrowser: View {
     }
 
     private func toggleFavorite(_ tone: T3KTone) {
-        let on = !(tone.is_favorited ?? false)
+        let on = !tone.isFav
         Task {
             if await client.setFavorite(tone.id, on), let i = tones.firstIndex(where: { $0.id == tone.id }) {
-                tones[i].is_favorited = on
+                tones[i].is_favorite = on
                 tones[i].favorites_count = max(0, (tones[i].favorites_count ?? 0) + (on ? 1 : -1))
             }
         }
     }
 
     private func fetch(page p: Int) async throws -> T3KClient.Page {
-        let fmt = target == .cab ? "" : "nam"
+        let fmt = (target == .cab || target == .cabB) ? "" : "nam"
         switch tab {
         case .search: return try await client.searchTones(query, gear: gear, architecture: arch, sort: sort, format: fmt, calibrated: calibratedOnly, verified: verifiedOnly, page: p)
         case .trending: return try await client.trending(gear: gear)
@@ -528,16 +537,16 @@ struct T3KToneDetail: View {
                     }
                     Spacer()
                     Button {
-                        let on = !(tone.is_favorited ?? false)
-                        Task { if await client.setFavorite(tone.id, on) { tone.is_favorited = on; tone.favorites_count = max(0, (tone.favorites_count ?? 0) + (on ? 1 : -1)) } }
+                        let on = !tone.isFav
+                        Task { if await client.setFavorite(tone.id, on) { tone.is_favorite = on; tone.favorites_count = max(0, (tone.favorites_count ?? 0) + (on ? 1 : -1)) } }
                     } label: {
-                        Label("\(tone.favorites_count ?? 0)", systemImage: tone.is_favorited == true ? "heart.fill" : "heart")
-                            .foregroundStyle(tone.is_favorited == true ? .pink : .secondary)
+                        Label("\(tone.favorites_count ?? 0)", systemImage: tone.isFav ? "heart.fill" : "heart")
+                            .foregroundStyle(tone.isFav ? .pink : .secondary)
                     }.buttonStyle(.bordered)
                 }
                 if let desc = tone.description, !desc.isEmpty { Text(desc).font(.callout) }
             }
-            Section(target == .cab ? "Impulse responses" : "Models") {
+            Section((target == .cab || target == .cabB) ? "Impulse responses" : "Models") {
                 if loadingModels { HStack { Spacer(); ProgressView(); Spacer() } }
                 else if models.isEmpty { Text("No files for this architecture — try Arch: Any.").font(.caption).foregroundStyle(.secondary) }
                 ForEach(models) { m in
@@ -546,7 +555,7 @@ struct T3KToneDetail: View {
                             Text(m.name).lineLimit(2)
                             HStack(spacing: 8) {
                                 if let s = m.size { Text(s).font(.caption2).foregroundStyle(.secondary) }
-                                if let a = m.architecture { Text("A\(a)").font(.caption2).foregroundStyle(.secondary) }
+                                if let a = m.arch { Text("A\(a)").font(.caption2).foregroundStyle(.secondary) }
                             }
                         }
                         Spacer()
@@ -574,8 +583,13 @@ struct T3KToneDetail: View {
             busy = m.id; progress = 0; error = nil
             do {
                 let url = try await client.download(m) { progress = $0 }
-                if target == .cab { audio.loadCabIR(from: url) }
-                else { audio.importModel(from: url, artworkURL: tone.thumb, gear: tone.gear, asPedal: target == .pedal) }
+                switch target {
+                case .cab: audio.loadCabIR(from: url)
+                case .cabB: audio.loadCabBIR(from: url)
+                case .amp: audio.importModel(from: url, artworkURL: tone.thumb, gear: tone.gear, slot: .amp)
+                case .ampB: audio.importModel(from: url, artworkURL: tone.thumb, gear: tone.gear, slot: .ampB)
+                case .pedal: audio.importModel(from: url, artworkURL: tone.thumb, gear: tone.gear, slot: .pedal)
+                }
                 Haptics.success()
                 onDownloaded()
             } catch { self.error = error.localizedDescription }

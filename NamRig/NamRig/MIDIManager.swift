@@ -22,6 +22,7 @@ enum MIDIParam: String, Codable, CaseIterable, Identifiable {
     case driveAmt, driveLevel, delayMix, delayFb, reverbMix, reverbDecay
     case compMakeup, boostDb, pedalDrive, pedalLevel, chorusMix, flangerMix, tremoloDepth
     case wah, delayTone, compThr, stompDrive, loopLevel
+    case ampBDrive, ampALevel, ampBLevel
     var id: String { rawValue }
     var range: ClosedRange<Double> {
         switch self {
@@ -33,6 +34,7 @@ enum MIDIParam: String, Codable, CaseIterable, Identifiable {
         case .compMakeup: return 0...24;      case .boostDb: return 0...18
         case .pedalDrive: return 0...24;      case .pedalLevel: return -24...12
         case .wah, .stompDrive: return 0...1; case .compThr: return -48...0
+        case .ampBDrive: return 0...24;       case .ampALevel, .ampBLevel: return -24...12
         }
     }
     var label: String {
@@ -47,6 +49,7 @@ enum MIDIParam: String, Codable, CaseIterable, Identifiable {
         case .chorusMix: return "Chorus Mix"; case .flangerMix: return "Flanger Mix"; case .tremoloDepth: return "Tremolo Depth"
         case .wah: return "Wah (expression)"; case .delayTone: return "Delay Tone"; case .compThr: return "Comp Thresh"
         case .stompDrive: return "Stomp Drive"; case .loopLevel: return "Loop Level"
+        case .ampBDrive: return "Amp B Drive"; case .ampALevel: return "Amp A Level"; case .ampBLevel: return "Amp B Level"
         }
     }
 }
