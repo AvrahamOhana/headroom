@@ -264,6 +264,7 @@
 					"$(inherited)",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				HEADER_SEARCH_PATHS = (
 					"$(PROJECT_DIR)/NamRig/Engine",
 					"$(PROJECT_DIR)/NamRig/Engine/NAMCore",
@@ -320,6 +321,7 @@
 					"$(inherited)",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				HEADER_SEARCH_PATHS = (
 					"$(PROJECT_DIR)/NamRig/Engine",
 					"$(PROJECT_DIR)/NamRig/Engine/NAMCore",
