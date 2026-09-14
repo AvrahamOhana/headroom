@@ -49,7 +49,11 @@ struct ChainStripView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 12) {
                 Text("SIGNAL CHAIN").font(.caption.bold()).foregroundStyle(.secondary)
+                #if os(macOS)
+                Text(audio.dualOn ? "drag tiles · rows A and B" : "drag tiles to reorder").font(.caption2).foregroundStyle(.tertiary)
+                #else
                 Text(audio.dualOn ? "hold a tile to drag · rows A and B" : "hold a tile to drag").font(.caption2).foregroundStyle(.tertiary)
+                #endif
                 Spacer()
                 Button { audio.dualOn.toggle(); Haptics.impact(.medium) } label: {
                     Label(audio.dualOn ? "A ∥ B" : "Dual", systemImage: audio.dualOn ? "rectangle.split.1x2.fill" : "rectangle.split.1x2")
@@ -93,7 +97,7 @@ struct ChainStripView: View {
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: spacing) {
                 endLabel(audio.dualOn ? id.label : "IN")
-                ForEach(Array(order.enumerated()), id: \.offset) { _, item in
+                ForEach(order, id: \.?.id) { item in
                     connector
                     if let inst = item, let cb = ChainBlock(inst.kind) {
                         tile(inst, cb, in: id)
@@ -108,7 +112,7 @@ struct ChainStripView: View {
                 addTile(id)
             }
             .padding(.vertical, 2)
-            .animation(.snappy(duration: 0.22), value: order.map { $0?.id.uuidString ?? "·" })
+            .animation(.snappy(duration: 0.22), value: order.map { $0?.id })
         }
         .background(GeometryReader { g in Color.clear.preference(key: RowFramesKey.self, value: [id: g.frame(in: .named(space))]) })
         .overlay(alignment: .leading) {
@@ -156,12 +160,22 @@ struct ChainStripView: View {
             .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 
-    /// Short hold (so horizontal scrolling still works), then the tile follows the finger.
+    /// macOS: a mouse drag starts immediately (it doesn't fight trackpad scrolling). iOS: a short,
+    /// jitter-tolerant hold first so the row can still scroll with a plain swipe.
     private func dragGesture(_ inst: BlockInstance, in id: RigPathID) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.12, maximumDistance: 12)
+        #if os(macOS)
+        DragGesture(minimumDistance: 6, coordinateSpace: .named(space))
+            .onChanged { g in update(g, inst, id) }
+            .onEnded { _ in commitDrag() }
+        #else
+        LongPressGesture(minimumDuration: 0.1, maximumDistance: 60)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(space)))
-            .onChanged { value in
-                guard case .second(true, let g?) = value else { return }
+            .onChanged { value in if case .second(true, let g?) = value { update(g, inst, id) } }
+            .onEnded { _ in commitDrag() }
+        #endif
+    }
+
+    private func update(_ g: DragGesture.Value, _ inst: BlockInstance, _ id: RigPathID) {
                 if drag == nil {
                     let center = frames.tiles[inst.id].map { CGPoint(x: $0.midX, y: $0.midY) } ?? g.startLocation
                     var d = Drag(inst: inst, from: id, location: g.location,
@@ -180,8 +194,6 @@ struct ChainStripView: View {
                 drag?.location = g.location
                 if drag?.lifted == false { withAnimation(.snappy(duration: 0.15)) { drag?.lifted = true } }
                 retarget(g.location)
-            }
-            .onEnded { _ in commitDrag() }
     }
 
     private func retarget(_ p: CGPoint) {
