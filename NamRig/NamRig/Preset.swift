@@ -1,7 +1,7 @@
 //
 //  Preset.swift
-//  NamRig — a full rig snapshot (all blocks + params) that can be saved, recalled,
-//  and (later) switched by MIDI program change. JSON-persisted in Documents.
+//  NamRig — a full rig snapshot: two paths (A ∥ B, each a PathState), the A/B mixer, the output
+//  stage, tempo and the per-preset MIDI-out list. JSON-persisted in Documents.
 //
 
 import Foundation
@@ -9,79 +9,45 @@ import Foundation
 struct Preset: Codable, Identifiable {
     var id = UUID()
     var name = "Preset"
-    var model = "Bugera V5"
-
-    var ampOn = true,    ampDrive = 0.0
-    var gateOn = true,   gateThr = -34.0
-    var compOn = false,  compThr = -18.0, compRatio = 4.0, compAtk = 10.0, compRel = 120.0, compMakeup = 0.0
-    var driveOn = false, driveAmt = 4.0,  driveTone = 4000.0, driveLevel = 0.0
-    var eqOn = true,     bass = 0.0, mid = 0.0, treble = 0.0
-    var delayOn = false, delayTime = 350.0, delayFb = 35.0, delayMix = 30.0
-    var reverbOn = false, reverbDecay = 70.0, reverbDamp = 30.0, reverbMix = 25.0
+    var a = PathState()
+    var b = PathState()
+    var dualOn = false
+    var levelA = 0.0, levelB = 0.0, panA = -0.7, panB = 0.7   // A/B mixer (dB, −1…1)
     var output = -6.0
     var stereoOn = false, stereoPingMix = 25.0, stereoPingTime = 350.0, stereoPingFb = 30.0, stereoSpace = 18.0, stereoWidth = 100.0
-
-    // FX expansion + free-order chain
-    var boostOn = false, boostDb = 6.0
-    var driveMode = 0
-    var stompOn = false, stompModel = 0, stompDrive = 0.5, stompTone = 0.5, stompLevel = 0.8
-    var chorusOn = false, chorusRate = 0.8, chorusDepth = 6.0, chorusMix = 40.0
-    var flangerOn = false, flangerRate = 0.4, flangerDepth = 2.0, flangerFb = 50.0, flangerMix = 50.0
-    var tremoloOn = false, tremoloRate = 5.0, tremoloDepth = 50.0
-    var reverbType = 3
-    var order: [String] = ["Noise Gate", "Compressor", "Boost", "Drive", "Pedal", "Amp", "EQ", "Chorus", "Flanger", "Tremolo", "Delay", "Reverb", "IR Reverb"]
-
-    // 2nd neural slot (pedal capture in front of the amp)
-    var pedalOn = false, pedalModel = "", pedalDrive = 0.0, pedalLevel = 0.0
-    var cabIR = ""   // cab impulse-response filename (in Documents/IRs), "" = none
-    var irReverbOn = false, irReverbMix = 35.0, irReverbPredelay = 0.0, irReverbIR = ""
-
-    // Gate v2 / tape delay / wah / tempo / per-preset MIDI out
-    var gateRel = 80.0, gateRange = -80.0
-    var delayTone = 60.0, delaySync = false, delayDiv: TempoClock.NoteDivision = .eighth, bpm = 0.0
-    var wahOn = false, wahPos = 0.5, wahAuto = false, wahSense = 50.0, wahMix = 92.0
+    var bpm = 0.0
     var midiOut: [MIDIOutMessage] = []
-
-    // Dual amp (A ∥ B): second capture + cab, per-path level/pan → stereo
-    var dualOn = false, modelB = "", ampBDrive = 0.0, cabIRB = ""
-    var ampALevel = 0.0, ampBLevel = 0.0, ampAPan = -0.7, ampBPan = 0.7
 }
 
-// Tolerant decoder: every field falls back to its default when a key is absent, so ADDING new
-// fields never invalidates saved presets again (the old "schema change wipes presets" gotcha).
-// Lives in an extension so the synthesized memberwise init (used by PresetStore.defaults) stays.
+// Tolerant decoder. A LEGACY preset (flat block keys at the top level, no `a`) decodes into path A —
+// `PathState`'s keys were deliberately kept identical to the old flat ones.
 extension Preset {
+    private enum LegacyKeys: String, CodingKey { case dualOn, ampALevel, ampBLevel, ampAPan, ampBPan }
     init(from decoder: Decoder) throws {
         self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
         func g<T: Decodable>(_ k: CodingKeys, _ def: T) -> T { (try? c.decode(T.self, forKey: k)) ?? def }
-        id = g(.id, id); name = g(.name, name); model = g(.model, model)
-        ampOn = g(.ampOn, ampOn); ampDrive = g(.ampDrive, ampDrive)
-        gateOn = g(.gateOn, gateOn); gateThr = g(.gateThr, gateThr)
-        compOn = g(.compOn, compOn); compThr = g(.compThr, compThr); compRatio = g(.compRatio, compRatio); compAtk = g(.compAtk, compAtk); compRel = g(.compRel, compRel); compMakeup = g(.compMakeup, compMakeup)
-        driveOn = g(.driveOn, driveOn); driveAmt = g(.driveAmt, driveAmt); driveTone = g(.driveTone, driveTone); driveLevel = g(.driveLevel, driveLevel)
-        eqOn = g(.eqOn, eqOn); bass = g(.bass, bass); mid = g(.mid, mid); treble = g(.treble, treble)
-        delayOn = g(.delayOn, delayOn); delayTime = g(.delayTime, delayTime); delayFb = g(.delayFb, delayFb); delayMix = g(.delayMix, delayMix)
-        reverbOn = g(.reverbOn, reverbOn); reverbDecay = g(.reverbDecay, reverbDecay); reverbDamp = g(.reverbDamp, reverbDamp); reverbMix = g(.reverbMix, reverbMix)
+        id = g(.id, id); name = g(.name, name)
+        if let pa = try? c.decode(PathState.self, forKey: .a) {
+            a = pa; b = g(.b, b)
+        } else {
+            a = (try? PathState(from: decoder)) ?? PathState()
+            var ord = a.order.compactMap { BlockKind(rawValue: $0) }
+            if !ord.contains(.cab), let ai = ord.firstIndex(of: .amp) { ord.insert(.cab, at: ord.index(after: ai)); a.order = ord.map { $0.rawValue } }
+        }
+        dualOn = g(.dualOn, dualOn)
+        levelA = g(.levelA, levelA); levelB = g(.levelB, levelB); panA = g(.panA, panA); panB = g(.panB, panB)
+        if let l = try? decoder.container(keyedBy: LegacyKeys.self) {
+            levelA = (try? l.decode(Double.self, forKey: .ampALevel)) ?? levelA
+            levelB = (try? l.decode(Double.self, forKey: .ampBLevel)) ?? levelB
+            panA = (try? l.decode(Double.self, forKey: .ampAPan)) ?? panA
+            panB = (try? l.decode(Double.self, forKey: .ampBPan)) ?? panB
+        }
         output = g(.output, output)
-        stereoOn = g(.stereoOn, stereoOn); stereoPingMix = g(.stereoPingMix, stereoPingMix); stereoPingTime = g(.stereoPingTime, stereoPingTime); stereoPingFb = g(.stereoPingFb, stereoPingFb); stereoSpace = g(.stereoSpace, stereoSpace); stereoWidth = g(.stereoWidth, stereoWidth)
-        boostOn = g(.boostOn, boostOn); boostDb = g(.boostDb, boostDb)
-        driveMode = g(.driveMode, driveMode)
-        stompOn = g(.stompOn, stompOn); stompModel = g(.stompModel, stompModel); stompDrive = g(.stompDrive, stompDrive); stompTone = g(.stompTone, stompTone); stompLevel = g(.stompLevel, stompLevel)
-        chorusOn = g(.chorusOn, chorusOn); chorusRate = g(.chorusRate, chorusRate); chorusDepth = g(.chorusDepth, chorusDepth); chorusMix = g(.chorusMix, chorusMix)
-        flangerOn = g(.flangerOn, flangerOn); flangerRate = g(.flangerRate, flangerRate); flangerDepth = g(.flangerDepth, flangerDepth); flangerFb = g(.flangerFb, flangerFb); flangerMix = g(.flangerMix, flangerMix)
-        tremoloOn = g(.tremoloOn, tremoloOn); tremoloRate = g(.tremoloRate, tremoloRate); tremoloDepth = g(.tremoloDepth, tremoloDepth)
-        reverbType = g(.reverbType, reverbType)
-        order = g(.order, order)
-        pedalOn = g(.pedalOn, pedalOn); pedalModel = g(.pedalModel, pedalModel); pedalDrive = g(.pedalDrive, pedalDrive); pedalLevel = g(.pedalLevel, pedalLevel)
-        cabIR = g(.cabIR, cabIR)
-        irReverbOn = g(.irReverbOn, irReverbOn); irReverbMix = g(.irReverbMix, irReverbMix); irReverbPredelay = g(.irReverbPredelay, irReverbPredelay); irReverbIR = g(.irReverbIR, irReverbIR)
-        gateRel = g(.gateRel, gateRel); gateRange = g(.gateRange, gateRange)
-        delayTone = g(.delayTone, delayTone); delaySync = g(.delaySync, delaySync); delayDiv = g(.delayDiv, delayDiv); bpm = g(.bpm, bpm)
-        wahOn = g(.wahOn, wahOn); wahPos = g(.wahPos, wahPos); wahAuto = g(.wahAuto, wahAuto); wahSense = g(.wahSense, wahSense); wahMix = g(.wahMix, wahMix)
+        stereoOn = g(.stereoOn, stereoOn); stereoPingMix = g(.stereoPingMix, stereoPingMix); stereoPingTime = g(.stereoPingTime, stereoPingTime)
+        stereoPingFb = g(.stereoPingFb, stereoPingFb); stereoSpace = g(.stereoSpace, stereoSpace); stereoWidth = g(.stereoWidth, stereoWidth)
+        bpm = g(.bpm, bpm)
         midiOut = g(.midiOut, midiOut)
-        dualOn = g(.dualOn, dualOn); modelB = g(.modelB, modelB); ampBDrive = g(.ampBDrive, ampBDrive); cabIRB = g(.cabIRB, cabIRB)
-        ampALevel = g(.ampALevel, ampALevel); ampBLevel = g(.ampBLevel, ampBLevel); ampAPan = g(.ampAPan, ampAPan); ampBPan = g(.ampBPan, ampBPan)
     }
 }
 
@@ -104,9 +70,9 @@ enum PresetStore {
     static var defaults: [Preset] {
         [
             Preset(name: "Clean"),
-            Preset(name: "Crunch", driveOn: true, driveAmt: 12, driveLevel: -2),
-            Preset(name: "Lead", driveOn: true, driveAmt: 22, delayOn: true, delayMix: 22),
-            Preset(name: "Ambient", delayOn: true, delayTime: 420, delayMix: 25, reverbOn: true, reverbDecay: 85, reverbMix: 45)
+            Preset(name: "Crunch", a: PathState(driveOn: true, driveAmt: 12, driveLevel: -2)),
+            Preset(name: "Lead", a: PathState(driveOn: true, driveAmt: 22, delayOn: true, delayMix: 22)),
+            Preset(name: "Ambient", a: PathState(delayOn: true, delayTime: 420, delayMix: 25, reverbOn: true, reverbDecay: 85, reverbMix: 45))
         ]
     }
 }

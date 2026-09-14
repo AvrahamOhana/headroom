@@ -187,23 +187,28 @@ is in its header; must print `ALL PASS`).
   +8.2 dB (loudness metadata −26.2) → −4.9 dBFS, floor −71 dB; + gate → floor −119 dB.
   Test DI: `ThirdParty/NeuralAmpModelerCore/example_audio/input.wav` (synthetic — digital silence; add `--noise`).
 
-### Dual amp / stereo routing (2026-09-14) — DONE (was roadmap item C)
-- **Model:** the free-order chain stays. `applyOrder()` derives `split` = index of the first of {Amp, Cab} and
-  `merge` = index after the last of them and publishes both into `SignalChain` (atomics, next to `count`).
-  `[0, split)` = common pre (mono) · `[split, merge)` = **Path A** (your Amp→Cab, plus anything the user dragged
-  between them) · `[merge, count)` = post. **Path B** = `context.chainB` = `[ampB, cabB]` (own capture / drive /
-  IR / level / pan). Render (dual on): pre → copy → A ∥ B → L/R mix (level × `equalPowerPan`, 4 smoothed gains
-  `gAL/gAR/gBL/gBR`) → post **in stereo** → looper on the mid (playback added to both sides) → the Tier-1
-  stereo widen stage is fed the mid → out. Dual OFF = the exact old mono render path (bit-identical).
-- **Stereo post:** `context.chainR` holds a CLONE of every non-amp/cab block (`gateR … irReverbR`) ordered like
-  the post segment; it processes the RIGHT channel. Every param write goes through the plural arrays
-  (`gates`, `comps`, `delays`, …) — **when you add a block param, write it as `for b in xs { b.p = v }`**, or R
-  silently drifts. The pedal capture loads TWO `NAMModel` instances (a model carries state; L/R can't share).
-- Preset: `dualOn, modelB, ampBDrive, cabIRB, ampALevel, ampBLevel, ampAPan, ampBPan`. UI: Amp editor → "Dual
-  Amp" toggle → Path B capture menu (Import / Browse TONE3000 `.ampB`), Drive B, Level A/B, Pan A/B; CAB editor
-  shows the Cab B row (`.cabB` browse / File). `ModelSlot` replaces the old `asPedal:` on `importModel`.
-  MIDI params `ampBDrive/ampALevel/ampBLevel`. Tiles read "AMP A|B" / "CAB A|B" while on. ~2× CPU while on.
-- `tools/blocks_test.swift` covers `SignalChain.render(from:to:)` + split/merge clamping.
+### Dual chain A ∥ B (2026-09-14, replaces the earlier "Amp B + Cab B" split/merge design) — DONE
+- **Model (`RigPath.swift`):** TWO complete, independent paths. `RigPath` = a full set of block INSTANCES + its own
+  `SignalChain` (`context.chainA` / `chainB`) + `state: PathState` (every per-path param + `order`) + status
+  strings + `loadedModelID/loadedPedalID`. Both chains get the same input; A/B `level × equalPowerPan` (4 smoothed
+  gains) → stereo L/R → looper on the mid → Tier-1 widen (fed the mid) → out. Dual OFF = the old mono path.
+- **Focus:** `AudioEngine`'s flat @Observable params (`gateThresholdDb`, `delayMixPct`, … the knob bindings) ALWAYS
+  mirror the **focused** path `P` (`focusRaw`). `setFocus(id)` = snapshot old (`capturePath()`) → switch →
+  `applyPath(state, force: false)` (no model/IR reloads when already loaded — the `loaded*` guards). `withFocus`
+  wraps one-off edits of the other path. For the non-focused path read `path(id).state` (`order(of:)`,
+  `isBlockEnabled(_:in:)`). Tapping a tile focuses its path. **Rule: every didSet writes `P.<block>.x`.**
+- **Preset (`Preset.swift`):** `{ id, name, a: PathState, b: PathState, dualOn, levelA/levelB/panA/panB, output,
+  stereo*, bpm, midiOut }`. LEGACY flat presets decode into path A (PathState keeps the old key names; Cab
+  auto-inserted after Amp; `ampALevel…` mapped). `tools/preset_test.swift` proves migration + round-trip.
+- **MIDI:** param + block-toggle mappings act on `AudioEngine.midiPath` (Settings in the MIDI sheet: Path A /
+  Path B / Selected). `MIDIParam.ampALevel/ampBLevel` = the A/B mixer. Looper/tuner/etc. are global.
+- **UI:** chain strip = one row per path (B appears with the "Dual" button / OUT-block toggle). Tiles are
+  `.draggable` (payload `"a|Delay"`) with `.dropDestination` on every tile (insert before) + a tail drop zone
+  (append); dragging across rows = `moveBlock` (the block's settings travel via `PathState.copy`). Long-press →
+  on/off · move to other path · remove. Focused row has a cyan bar; the editor header shows the path badge.
+  **Looper is its own LOOP tile** (after the paths, before OUT) with a transport panel. OUT block = Master, Dual
+  toggle + Level/Pan A/B, stereo widen, per-preset MIDI out. Reorder sheet = the focused path.
+- `SignalChain.split/merge` + `render(from:to:)` remain (tested) but are unused by the render path now.
 - TONE3000 on macOS: the `namrig://` scheme is registered in `NamRig/Info.plist` (`INFOPLIST_FILE`, merged with the
   generated plist) — `ASWebAuthenticationSession` on the Mac requires it. Browser sheet has a fixed Mac size
   (`sheetSize`), tone fields are `is_favorite` / `architecture_version`, HTTP ≥ 400 now surfaces as an error.
@@ -257,12 +262,15 @@ NamRig/NamRig/
   ContentView.swift    main UI: header, presetBar, chain strip + tile/editor, OUTPUT block (+ per-preset MIDI out), all sheets
   LiveView.swift       full-screen stage view
   MIDIManager.swift    CoreMIDI in + out: CC/note/PC mapping, learn, clock in/out, per-preset sends, CC feedback
-  Preset.swift         Preset struct + tolerant Codable decoder + PresetStore (Documents/presets.json)
+  RigPath.swift        RigPathID / PathState (per-path params, tolerant decoder, copy) / RigPath (blocks + chain + state)
+  Preset.swift         Preset = two PathStates + globals; legacy flat-preset migration; PresetStore (Documents/presets.json)
   T3K.swift            TONE3000 client (OAuth PKCE + refresh) + browser tabs/sort/favorites/detail (Target .amp/.pedal/.cab)
   Engine/NAMModel.*    Obj-C++ bridge to NeuralAmpModelerCore (+ loudness / input / output level metadata)
 tools/
   deploy.sh            build + install + launch (device-aware, dodges the decoy .apps)
   blocks_test.swift    compiles the REAL block sources + stub NAMModel; numeric checks (gate/comp/delay/chorus/flanger/amp/wah)
+  preset_test.swift    preset schema round-trip + legacy single-path → path A migration
+  render.sh/.swift     offline render through the real NAM core + blocks; noise-floor / peak / click metrics
   *_test.swift         older headless verifiers on MIRROR copies (reverb_algo, od, aa, stereo, ir_reverb, wah, tempo…)
 docs/fx-roadmap.md     the FX research (OD recipes, reverb algorithms, legal/naming)
 keys.md                GITIGNORED — TONE3000 token; re-auth in-app on a new machine

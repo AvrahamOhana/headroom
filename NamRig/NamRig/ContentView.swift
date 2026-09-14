@@ -62,6 +62,7 @@ struct ContentView: View {
     @State private var audio = AudioEngine()
     @State private var selected: ChainBlock? = nil   // nil → no editor shown (clean screen)
     @State private var outputSelected = false        // the OUTPUT block's editor (master + stereo)
+    @State private var looperSelected = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSave = false
     @State private var newName = ""
@@ -70,8 +71,6 @@ struct ContentView: View {
     @AppStorage("uiAppearance") private var uiAppearance = 0   // 0 system · 1 light · 2 dark
     @State private var showImporter = false
     @State private var showIRImporter = false
-    @State private var showIRImporterB = false
-    @State private var showImporterB = false
     @State private var showRevIRImporter = false
     @State private var t3kBrowse: T3KBrowser.Target? = nil   // non-nil → present browser for that slot
     @State private var showManage = false
@@ -95,6 +94,7 @@ struct ContentView: View {
                 chainStrip
                 if let sel = selected { editorPanel(sel) }
                 else if outputSelected { outputEditorPanel }
+                else if looperSelected { looperPanel }
                 if let err = audio.lastError {
                     Text(err).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center)
                 }
@@ -131,15 +131,6 @@ struct ContentView: View {
         }
         .fileImporter(isPresented: $showIRImporter, allowedContentTypes: [.wav, .aiff, .audio]) { result in
             if case .success(let url) = result { audio.loadCabIR(from: url) }
-        }
-        .fileImporter(isPresented: $showIRImporterB, allowedContentTypes: [.wav, .aiff, .audio]) { result in
-            if case .success(let url) = result { audio.loadCabBIR(from: url) }
-        }
-        .fileImporter(isPresented: $showImporterB, allowedContentTypes: [UTType(filenameExtension: "nam") ?? .data]) { result in
-            if case .success(let url) = result { audio.importModel(from: url, slot: .ampB) }
-        }
-        .fileImporter(isPresented: $showRevIRImporter, allowedContentTypes: [.wav, .aiff, .audio]) { result in
-            if case .success(let url) = result { audio.loadReverbIR(from: url) }
         }
         .sheet(item: $t3kBrowse) { target in T3KBrowser(audio: audio, target: target) }
         .sheet(isPresented: $showManage) { manageSheet }
@@ -223,36 +214,74 @@ struct ContentView: View {
 
     private var chainStrip: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
+            HStack(spacing: 12) {
                 Text("SIGNAL CHAIN").font(.caption.bold()).foregroundStyle(.secondary)
                 Spacer()
+                Button { audio.dualOn.toggle(); Haptics.impact(.medium) } label: {
+                    Label(audio.dualOn ? "A ∥ B" : "Dual", systemImage: audio.dualOn ? "rectangle.split.1x2.fill" : "rectangle.split.1x2")
+                        .font(.caption.bold())
+                }.buttonStyle(.plain).foregroundStyle(audio.dualOn ? .cyan : .secondary)
                 Button { showReorder = true } label: {
                     Label("Reorder", systemImage: "arrow.up.arrow.down").font(.caption.bold())
                 }.buttonStyle(.plain).foregroundStyle(.secondary)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    endLabel("IN")
-                    ForEach(audio.blockOrder.compactMap { ChainBlock($0) }) { block in
-                        connector
-                        tile(block)
-                    }
+            pathRow(.a)
+            if audio.dualOn { pathRow(.b) }
+            HStack(spacing: 4) {
+                endLabel(audio.dualOn ? "A+B" : "")
+                connector
+                looperTile
+                connector
+                outputTile
+                Spacer()
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    /// One path's tiles. Tiles are draggable; dropping on a tile inserts before it, dropping on the
+    /// row's tail appends. Dragging between rows moves the block (its settings come along).
+    private func pathRow(_ id: RigPathID) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                endLabel(audio.dualOn ? id.label : "IN")
+                ForEach(audio.order(of: id).compactMap { ChainBlock($0) }) { block in
                     connector
-                    addTile
-                    connector
-                    outputTile
+                    tile(block, in: id)
                 }
-                .padding(.vertical, 2)
+                connector
+                addTile(id)
+                dropTail(id)
+            }
+            .padding(.vertical, 2)
+        }
+        .overlay(alignment: .leading) {
+            if audio.dualOn {
+                RoundedRectangle(cornerRadius: 2).fill(audio.focus == id ? Color.cyan : Color.clear).frame(width: 3, height: 60)
             }
         }
     }
 
-    private func tile(_ block: ChainBlock) -> some View {
-        let on = isOn(block), sel = selected == block
-        return Button { selected = (selected == block ? nil : block); outputSelected = false } label: {
+    private func dragPayload(_ block: ChainBlock, _ id: RigPathID) -> String { "\(id.rawValue)|\(block.kind.rawValue)" }
+    private func handleDrop(_ items: [String], to: RigPathID, before: ChainBlock?) -> Bool {
+        guard let item = items.first else { return false }
+        let parts = item.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let from = RigPathID(rawValue: parts[0]), let kind = BlockKind(rawValue: parts[1]) else { return false }
+        if before?.kind == kind && from == to { return true }
+        audio.moveBlock(kind, from: from, to: to, before: before?.kind)
+        Haptics.impact(.light)
+        return true
+    }
+
+    private func tile(_ block: ChainBlock, in id: RigPathID) -> some View {
+        let on = audio.isBlockEnabled(block.kind, in: id), sel = selected == block && audio.focus == id
+        return Button {
+            audio.setFocus(id)
+            selected = (sel ? nil : block); outputSelected = false; looperSelected = false
+        } label: {
             VStack(spacing: 6) {
                 Image(systemName: block.icon).font(.system(size: 20, weight: .semibold))
-                Text((block == .amp || block == .cab) && audio.dualOn ? block.short + " A|B" : block.short).font(.system(size: 10, weight: .heavy))
+                Text(block.short).font(.system(size: 10, weight: .heavy))
             }
             .frame(width: 58, height: 74)
             .foregroundStyle(on ? .white : .white.opacity(0.3))
@@ -261,13 +290,23 @@ struct ContentView: View {
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(sel ? .white : .clear, lineWidth: 2))
         }
         .buttonStyle(.plain)
+        .draggable(dragPayload(block, id))
+        .dropDestination(for: String.self) { items, _ in handleDrop(items, to: id, before: block) }
+        .contextMenu {
+            Button { audio.setBlockEnabled(block.kind, !on, in: id) } label: { Label(on ? "Turn off" : "Turn on", systemImage: "power") }
+            if audio.dualOn && !audio.order(of: id.other).contains(block.kind) {
+                Button { audio.moveBlock(block.kind, from: id, to: id.other, before: nil) } label: { Label("Move to path \(id.other.label)", systemImage: "arrow.turn.down.right") }
+            }
+            Button(role: .destructive) { audio.removeBlock(block.kind, in: id); if selected == block && audio.focus == id { selected = nil } } label: { Label("Remove", systemImage: "trash") }
+        }
     }
 
-    private var addTile: some View {
-        Menu {
-            ForEach(audio.availableToAdd, id: \.self) { kind in
+    private func addTile(_ id: RigPathID) -> some View {
+        let avail = audio.availableToAdd(in: id)
+        return Menu {
+            ForEach(avail, id: \.self) { kind in
                 if let cb = ChainBlock(kind) {
-                    Button { audio.addBlock(kind); selected = cb } label: { Label(cb.full, systemImage: cb.icon) }
+                    Button { audio.addBlock(kind, in: id); audio.setFocus(id); selected = cb; outputSelected = false; looperSelected = false } label: { Label(cb.full, systemImage: cb.icon) }
                 }
             }
         } label: {
@@ -280,7 +319,30 @@ struct ContentView: View {
             .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1.5, dash: [4])))
         }
-        .disabled(audio.availableToAdd.isEmpty)
+        .disabled(avail.isEmpty)
+    }
+
+    /// Drop zone at the end of a row: drop here to append.
+    private func dropTail(_ id: RigPathID) -> some View {
+        RoundedRectangle(cornerRadius: 12).fill(Color.clear)
+            .frame(width: 40, height: 74)
+            .overlay(Image(systemName: "arrow.down.to.line").foregroundStyle(.tertiary).font(.caption))
+            .dropDestination(for: String.self) { items, _ in handleDrop(items, to: id, before: nil) }
+    }
+
+    private var looperTile: some View {
+        let active = audio.looperStateLabel != "Idle"
+        return Button { looperSelected.toggle(); outputSelected = false; selected = nil } label: {
+            VStack(spacing: 6) {
+                Image(systemName: "repeat.circle.fill").font(.system(size: 20, weight: .semibold))
+                Text("LOOP").font(.system(size: 10, weight: .heavy))
+            }
+            .frame(width: 58, height: 74)
+            .foregroundStyle(.white)
+            .background(active ? Color.green.gradient : Color.green.opacity(0.45).gradient, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(looperSelected ? .white : .clear, lineWidth: 2))
+        }
+        .buttonStyle(.plain)
     }
 
     private func endLabel(_ t: String) -> some View {
@@ -293,6 +355,10 @@ struct ContentView: View {
     private func editorPanel(_ block: ChainBlock) -> some View {
         VStack(spacing: 12) {
             HStack {
+                if audio.dualOn {
+                    Text(audio.focus.label).font(.caption.bold()).foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2).background(Color.cyan, in: Capsule())
+                }
                 Image(systemName: block.icon).foregroundStyle(isOn(block) ? block.color : .secondary)
                 Text(block.full).font(.headline)
                 Spacer()
@@ -395,14 +461,11 @@ struct ContentView: View {
             }
             Text(audio.modelStatus).font(.caption).foregroundStyle(.secondary)
             HStack(alignment: .top, spacing: 14) {
-                Knob(label: audio.dualOn ? "Drive A" : "Drive", value: $audio.inputDriveDb, range: 0...24, unit: "dB", color: c, defaultValue: 0, size: 72)
+                Knob(label: "Drive", value: $audio.inputDriveDb, range: 0...24, unit: "dB", color: c, defaultValue: 0, size: 72)
                 TimelineView(.periodic(from: .now, by: 0.08)) { _ in
                     VStack(spacing: 8) { meter("In", audio.inPeakDb); meter("Out", audio.outPeakDb) }
                 }
             }
-            Divider().overlay(.secondary.opacity(0.2))
-            Toggle(isOn: $audio.dualOn) { Label("Dual Amp  A ∥ B → stereo", systemImage: "rectangle.split.2x1").font(.subheadline.bold()) }.tint(c)
-            if audio.dualOn { dualAmpSection(c) }
         case .pedal:
             if let art = audio.selectedPedalArtworkPath, let img = Image(file: art) {
                 RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.25))
@@ -471,19 +534,7 @@ struct ContentView: View {
                 Button { t3kBrowse = .cab } label: { Label("Browse", systemImage: "magnifyingglass") }.font(.subheadline)
                 Button { showIRImporter = true } label: { Label("File", systemImage: "square.and.arrow.down") }.font(.subheadline)
             }
-            if audio.dualOn {
-                HStack(spacing: 8) {
-                    Image(systemName: "hifispeaker.2.fill").foregroundStyle(.secondary)
-                    Text("B: " + audio.cabBIRName).font(.subheadline).lineLimit(1)
-                    Spacer()
-                    if audio.cabBIRName != "None" {
-                        Button { audio.clearCabBIR() } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
-                    }
-                    Button { t3kBrowse = .cabB } label: { Label("Browse", systemImage: "magnifyingglass") }.font(.subheadline)
-                    Button { showIRImporterB = true } label: { Label("File", systemImage: "square.and.arrow.down") }.font(.subheadline)
-                }
-            }
-            Text(audio.dualOn ? "Cab A feeds path A, Cab B feeds path B. Browse TONE3000 cabs or load your own .wav / .aiff." : "Speaker cabinet IR. Browse TONE3000 cabs or load your own .wav / .aiff.")
+            Text("Speaker cabinet IR. Browse TONE3000 cabs or load your own .wav / .aiff.")
                 .font(.caption2).foregroundStyle(.secondary)
         case .delay:
             Toggle("Tempo Sync", isOn: $audio.delaySync).tint(.purple).font(.subheadline)
@@ -532,50 +583,6 @@ struct ContentView: View {
         }
     }
 
-    /// Path B (second capture + its drive) and the A/B mixer.
-    private func dualAmpSection(_ c: Color) -> some View {
-        VStack(spacing: 10) {
-            if let art = audio.selectedArtworkBPath, let img = Image(file: art) {
-                RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.25))
-                    .frame(maxWidth: .infinity).frame(height: 110)
-                    .overlay { img.resizable().interpolation(.high).scaledToFit().padding(8) }
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .allowsHitTesting(false)
-            }
-            Menu {
-                Button { audio.selectedModelBID = "" } label: { Label("None (empty)", systemImage: audio.selectedModelBID.isEmpty ? "checkmark" : "nosign") }
-                ForEach(audio.ampModels) { m in
-                    Button { audio.selectedModelBID = m.id } label: {
-                        Label(m.name, systemImage: m.id == audio.selectedModelBID ? "checkmark" : (m.bundled ? "shippingbox" : "tray.and.arrow.down"))
-                    }
-                }
-                Divider()
-                Button { showImporterB = true } label: { Label("Import .nam…", systemImage: "square.and.arrow.down") }
-                Button { t3kBrowse = .ampB } label: { Label("Browse TONE3000…", systemImage: "magnifyingglass") }
-            } label: {
-                HStack {
-                    Text("B").font(.caption.bold()).padding(.horizontal, 6).padding(.vertical, 2).background(c.opacity(0.35), in: Capsule())
-                    Image(systemName: "amplifier")
-                    Text(audio.selectedModelBName).fontWeight(.semibold)
-                    Spacer()
-                    Image(systemName: "chevron.up.chevron.down").font(.caption)
-                }
-                .padding(.vertical, 8).padding(.horizontal, 12)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-            }
-            Text(audio.modelBStatus).font(.caption).foregroundStyle(.secondary)
-            KnobGrid {
-                Knob(label: "Drive B", value: $audio.ampBDriveDb, range: 0...24, unit: "dB", color: c, defaultValue: 0)
-                Knob(label: "Level A", value: $audio.ampALevelDb, range: -24...12, unit: "dB", color: c, defaultValue: 0)
-                Knob(label: "Level B", value: $audio.ampBLevelDb, range: -24...12, unit: "dB", color: c, defaultValue: 0)
-                Knob(label: "Pan A", value: $audio.ampAPan, range: -1...1, unit: "", decimals: 2, color: c, defaultValue: -0.7, bipolar: true)
-                Knob(label: "Pan B", value: $audio.ampBPan, range: -1...1, unit: "", decimals: 2, color: c, defaultValue: 0.7, bipolar: true)
-            }
-            Text("Split before the Amp, merge after the Cab. Everything after runs in stereo. Cab B lives in the CAB block. ~2× CPU while on.")
-                .font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-
     private func grMeter(_ gr: Float) -> some View {
         let norm = max(0, min(1, Double(-gr) / 24))
         return HStack(spacing: 8) {
@@ -614,7 +621,7 @@ struct ContentView: View {
                 }
             }
             .alwaysEditing()
-            .navigationTitle("Chain Order")
+            .navigationTitle(audio.dualOn ? "Chain Order · Path \(audio.focus.label)" : "Chain Order")
             .inlineTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showReorder = false } } }
         }
@@ -666,9 +673,33 @@ struct ContentView: View {
                     .font(.caption2).foregroundStyle(.secondary)
             }
             Divider().overlay(.secondary.opacity(0.2))
+            Toggle(isOn: $audio.dualOn) {
+                Label("Dual path  A ∥ B", systemImage: "rectangle.split.1x2").font(.subheadline.bold())
+            }
+            .tint(.cyan)
+            if audio.dualOn {
+                KnobGrid {
+                    Knob(label: "Level A", value: $audio.pathALevelDb, range: -24...12, unit: "dB", color: .cyan, defaultValue: 0)
+                    Knob(label: "Pan A", value: $audio.pathAPan, range: -1...1, unit: "", decimals: 2, color: .cyan, defaultValue: -0.7, bipolar: true)
+                    Knob(label: "Level B", value: $audio.pathBLevelDb, range: -24...12, unit: "dB", color: .cyan, defaultValue: 0)
+                    Knob(label: "Pan B", value: $audio.pathBPan, range: -1...1, unit: "", decimals: 2, color: .cyan, defaultValue: 0.7, bipolar: true)
+                }
+                Text("Both paths get the guitar; each is a complete chain. Drag tiles between the A and B rows. ~2× CPU.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            Divider().overlay(.secondary.opacity(0.2))
+            midiOutSection
+        }
+        .padding().frame(maxWidth: .infinity)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.secondary.opacity(0.25)))
+    }
+
+    private var looperPanel: some View {
+        VStack(spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "repeat.circle.fill").foregroundStyle(.green)
-                Text("Looper").font(.subheadline.bold())
+                Text("Looper").font(.headline)
                 Spacer()
                 Text(audio.looperStateLabel).font(.caption.bold().monospacedDigit()).foregroundStyle(.secondary)
             }
@@ -679,13 +710,13 @@ struct ContentView: View {
                 Button { audio.stopLooper() } label: { Image(systemName: "stop.fill") }.buttonStyle(.bordered)
                 Button { audio.clearLooper() } label: { Image(systemName: "trash") }.buttonStyle(.bordered).tint(.red)
             }
-            sliderRow("Loop Level", value: $audio.loopLevel, range: 0...100, unit: "%")
-            Divider().overlay(.secondary.opacity(0.2))
-            midiOutSection
+            KnobGrid { Knob(label: "Loop Level", value: $audio.loopLevel, range: 0...100, unit: "%", color: .green, defaultValue: 100) }
+            Text("Records the full rig (after both paths). One button: Record → Play → Overdub. Map a footswitch in MIDI.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
         .padding().frame(maxWidth: .infinity)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.secondary.opacity(0.25)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.green.opacity(0.5), lineWidth: 1.5))
     }
 
     private var looperButtonText: String {
@@ -773,6 +804,9 @@ struct ContentView: View {
                     }
                     Toggle("Bank Select (CC0/32) + PC", isOn: $midi.bankSelect)
                     Toggle("Follow MIDI clock (tempo)", isOn: $midi.clockInSync)
+                    Picker("Knob / switch mappings act on", selection: Binding(get: { audio.midiPath?.rawValue ?? "focus" }, set: { audio.midiPath = RigPathID(rawValue: $0) })) {
+                        Text("Path A").tag("a"); Text("Path B").tag("b"); Text("Selected path").tag("focus")
+                    }
                     Text("Program Change selects preset 1–\(max(audio.presets.count, 1)).").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Output") {

@@ -107,21 +107,26 @@ struct LiveView: View {
 
     // MARK: bottom — mini signal-chain readout
     private var chainViz: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 5) {
-                ForEach(audio.blockOrder.compactMap { ChainBlock($0) }) { b in
-                    let on = audio.isBlockEnabled(b.kind)
-                    VStack(spacing: 3) {
-                        Image(systemName: b.icon).font(.system(size: 13, weight: .semibold))
-                        Text(b.short).font(.system(size: 7, weight: .heavy))
+        VStack(spacing: 4) {
+            ForEach(audio.dualOn ? RigPathID.allCases : [.a]) { id in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 5) {
+                        if audio.dualOn { Text(id.label).font(.system(size: 11, weight: .black, design: .rounded)).foregroundStyle(.secondary).frame(width: 14) }
+                        ForEach(audio.order(of: id).compactMap { ChainBlock($0) }) { b in
+                            let on = audio.isBlockEnabled(b.kind, in: id)
+                            VStack(spacing: 3) {
+                                Image(systemName: b.icon).font(.system(size: 13, weight: .semibold))
+                                Text(b.short).font(.system(size: 7, weight: .heavy))
+                            }
+                            .frame(width: 40, height: 42)
+                            .foregroundStyle(on ? .white : .secondary)
+                            .background(on ? AnyShapeStyle(b.color.gradient) : AnyShapeStyle(.quaternary),
+                                        in: RoundedRectangle(cornerRadius: 8))
+                        }
                     }
-                    .frame(width: 40, height: 42)
-                    .foregroundStyle(on ? .white : .secondary)
-                    .background(on ? AnyShapeStyle(b.color.gradient) : AnyShapeStyle(.quaternary),
-                                in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal, 4)
                 }
             }
-            .padding(.horizontal, 4)
         }
         .padding(.bottom, 12)
     }

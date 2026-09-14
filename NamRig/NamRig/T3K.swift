@@ -307,7 +307,7 @@ private let t3kArchs: [(String, String)] = [("A2", "2"), ("A1", "1"), ("Custom",
 private let t3kSorts: [(String, String)] = [("Best match", "best-match"), ("Trending", "trending"), ("Newest", "newest"), ("Most downloaded", "downloads-all-time"), ("Oldest", "oldest")]
 
 struct T3KBrowser: View {
-    enum Target: Identifiable { case amp, ampB, pedal, cab, cabB; var id: Self { self } }
+    enum Target: Identifiable { case amp, pedal, cab; var id: Self { self } }
     enum Tab: String, CaseIterable, Identifiable { case search = "Search", trending = "Trending", favorites = "Favorites", mine = "Mine", downloaded = "Downloaded"; var id: Self { self } }
     let audio: AudioEngine
     let target: Target
@@ -324,7 +324,7 @@ struct T3KBrowser: View {
     init(audio: AudioEngine, target: Target = .amp) {
         self.audio = audio
         self.target = target
-        let isCab = target == .cab || target == .cabB
+        let isCab = target == .cab
         _gear = State(initialValue: target == .pedal ? "pedal" : (isCab ? "cab" : "amp-cab"))
         _arch = State(initialValue: isCab ? "" : "2")   // cab IRs have no NAM architecture
     }
@@ -385,7 +385,7 @@ struct T3KBrowser: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     filterMenu(title: t3kGears.first { $0.1 == gear }?.0 ?? "Gear", options: t3kGears) { gear = $1; Task { await search() } }
-                    if target != .cab && target != .cabB {
+                    if target != .cab {
                         filterMenu(title: "Arch: \(t3kArchs.first { $0.1 == arch }?.0 ?? "Any")", options: t3kArchs) { arch = $1; Task { await search() } }
                     }
                     if tab == .search {
@@ -474,7 +474,7 @@ struct T3KBrowser: View {
     }
 
     private func fetch(page p: Int) async throws -> T3KClient.Page {
-        let fmt = (target == .cab || target == .cabB) ? "" : "nam"
+        let fmt = target == .cab ? "" : "nam"
         switch tab {
         case .search: return try await client.searchTones(query, gear: gear, architecture: arch, sort: sort, format: fmt, calibrated: calibratedOnly, verified: verifiedOnly, page: p)
         case .trending: return try await client.trending(gear: gear)
@@ -546,7 +546,7 @@ struct T3KToneDetail: View {
                 }
                 if let desc = tone.description, !desc.isEmpty { Text(desc).font(.callout) }
             }
-            Section((target == .cab || target == .cabB) ? "Impulse responses" : "Models") {
+            Section(target == .cab ? "Impulse responses" : "Models") {
                 if loadingModels { HStack { Spacer(); ProgressView(); Spacer() } }
                 else if models.isEmpty { Text("No files for this architecture — try Arch: Any.").font(.caption).foregroundStyle(.secondary) }
                 ForEach(models) { m in
@@ -585,9 +585,7 @@ struct T3KToneDetail: View {
                 let url = try await client.download(m) { progress = $0 }
                 switch target {
                 case .cab: audio.loadCabIR(from: url)
-                case .cabB: audio.loadCabBIR(from: url)
                 case .amp: audio.importModel(from: url, artworkURL: tone.thumb, gear: tone.gear, slot: .amp)
-                case .ampB: audio.importModel(from: url, artworkURL: tone.thumb, gear: tone.gear, slot: .ampB)
                 case .pedal: audio.importModel(from: url, artworkURL: tone.thumb, gear: tone.gear, slot: .pedal)
                 }
                 Haptics.success()
