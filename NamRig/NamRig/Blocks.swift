@@ -16,7 +16,7 @@ import Foundation
 import Synchronization
 import Accelerate
 
-enum BlockKind: String, Sendable, CaseIterable {
+enum BlockKind: String, Sendable, CaseIterable, Codable {
     case gate = "Noise Gate"
     case comp = "Compressor"
     case boost = "Boost"
@@ -1104,54 +1104,52 @@ final class FlangerBlock: AudioBlock {
     deinit { buf?.deallocate() }
 }
 
-/// Ordered chain. `install` sets the fixed block set once; `reorder` swaps the render order
-/// live (RT-safe — render reads an int order-buffer + atomic count, never a torn pointer).
+/// Ordered chain of block objects, editable LIVE and lock-free. Two slot tables are double-buffered:
+/// the main thread fills the inactive table, then flips `active`; the audio thread reads whichever
+/// table is active. Blocks are referenced unretained on the audio thread — `keep` holds the current
+/// set and `graveyard` the last few replaced sets, so a block removed mid-render is never freed
+/// while a callback may still be inside it.
 final class SignalChain: @unchecked Sendable {
-    private var all: [AudioBlock] = []
-    private let order: UnsafeMutableBufferPointer<Int>
-    private let count = Atomic<Int>(0)
-    /// Dual-path markers into the order: [0, split) = common pre, [split, merge) = path A, [merge, count) = post.
-    let split = Atomic<Int>(0)
-    let merge = Atomic<Int>(0)
     private let cap: Int
+    private let slots: [UnsafeMutablePointer<UnsafeRawPointer?>]   // [2][cap]
+    private let count0 = Atomic<Int>(0), count1 = Atomic<Int>(0)
+    private let active = Atomic<Int>(0)
+    private var keep: [AudioBlock] = []
+    private var graveyard: [[AudioBlock]] = []
 
-    init(capacity: Int = 24) {
+    init(capacity: Int = 64) {
         cap = capacity
-        order = .allocate(capacity: capacity)
-        order.initialize(repeating: 0)
+        slots = (0..<2).map { _ in
+            let p = UnsafeMutablePointer<UnsafeRawPointer?>.allocate(capacity: capacity); p.initialize(repeating: nil, count: capacity); return p
+        }
     }
-    deinit { order.deallocate() }
+    deinit { for p in slots { p.deallocate() } }
 
-    var blocks: [AudioBlock] { all }
+    var blocks: [AudioBlock] { keep }
 
-    /// Install the full block set (once, before the engine starts). Initial order = given sequence.
-    func install(_ blocks: [AudioBlock]) {
-        all = blocks
+    /// Publish a new block list (main thread). RT-safe for a concurrent `render`.
+    func set(_ blocks: [AudioBlock]) {
         let n = min(blocks.count, cap)
-        for i in 0..<n { order[i] = i }
-        count.store(n, ordering: .releasing)
+        let next = 1 - active.load(ordering: .relaxed)
+        for i in 0..<n { slots[next][i] = UnsafeRawPointer(Unmanaged.passUnretained(blocks[i]).toOpaque()) }
+        if next == 0 { count0.store(n, ordering: .releasing) } else { count1.store(n, ordering: .releasing) }
+        graveyard.append(keep); if graveyard.count > 4 { graveyard.removeFirst() }
+        keep = Array(blocks.prefix(n))
+        active.store(next, ordering: .releasing)
     }
+    /// Back-compat: install = set.
+    func install(_ blocks: [AudioBlock]) { set(blocks) }
 
-    /// Reorder by indices into `all` (a permutation). Safe to call live from the main thread.
-    func reorder(_ indices: [Int], split: Int? = nil, merge: Int? = nil) {
-        let n = min(indices.count, cap)
-        for i in 0..<n where indices[i] >= 0 && indices[i] < all.count { order[i] = indices[i] }
-        self.split.store(min(max(split ?? n, 0), n), ordering: .relaxed)
-        self.merge.store(min(max(merge ?? n, 0), n), ordering: .relaxed)
-        count.store(n, ordering: .releasing)
-    }
-
-    func prepare(sampleRate: Double, maxBlock: Int) { for b in all { b.prepare(sampleRate: sampleRate, maxBlock: maxBlock) } }
-    func reset() { for b in all { b.reset() } }
+    func prepare(sampleRate: Double, maxBlock: Int) { for b in keep { b.prepare(sampleRate: sampleRate, maxBlock: maxBlock) } }
+    func reset() { for b in keep { b.reset() } }
 
     func render(_ s: UnsafeMutablePointer<Float>, _ n: Int) {
-        let c = count.load(ordering: .acquiring)
-        for i in 0..<c { all[order[i]].render(s, n) }
-    }
-    /// Render a sub-range of the order (dual-path: pre / path A / post).
-    func render(_ s: UnsafeMutablePointer<Float>, _ n: Int, from: Int, to: Int) {
-        let c = count.load(ordering: .acquiring)
-        let a = max(0, min(from, c)), b = max(a, min(to, c))
-        for i in a..<b { all[order[i]].render(s, n) }
+        let a = active.load(ordering: .acquiring)
+        let c = a == 0 ? count0.load(ordering: .acquiring) : count1.load(ordering: .acquiring)
+        let table = slots[a]
+        for i in 0..<c {
+            guard let raw = table[i] else { continue }
+            Unmanaged<AudioBlock>.fromOpaque(raw).takeUnretainedValue().render(s, n)
+        }
     }
 }

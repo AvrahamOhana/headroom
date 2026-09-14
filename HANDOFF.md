@@ -187,28 +187,37 @@ is in its header; must print `ALL PASS`).
   +8.2 dB (loudness metadata −26.2) → −4.9 dBFS, floor −71 dB; + gate → floor −119 dB.
   Test DI: `ThirdParty/NeuralAmpModelerCore/example_audio/input.wav` (synthetic — digital silence; add `--noise`).
 
-### Dual chain A ∥ B (2026-09-14, replaces the earlier "Amp B + Cab B" split/merge design) — DONE
-- **Model (`RigPath.swift`):** TWO complete, independent paths. `RigPath` = a full set of block INSTANCES + its own
-  `SignalChain` (`context.chainA` / `chainB`) + `state: PathState` (every per-path param + `order`) + status
-  strings + `loadedModelID/loadedPedalID`. Both chains get the same input; A/B `level × equalPowerPan` (4 smoothed
-  gains) → stereo L/R → looper on the mid → Tier-1 widen (fed the mid) → out. Dual OFF = the old mono path.
-- **Focus:** `AudioEngine`'s flat @Observable params (`gateThresholdDb`, `delayMixPct`, … the knob bindings) ALWAYS
-  mirror the **focused** path `P` (`focusRaw`). `setFocus(id)` = snapshot old (`capturePath()`) → switch →
-  `applyPath(state, force: false)` (no model/IR reloads when already loaded — the `loaded*` guards). `withFocus`
-  wraps one-off edits of the other path. For the non-focused path read `path(id).state` (`order(of:)`,
-  `isBlockEnabled(_:in:)`). Tapping a tile focuses its path. **Rule: every didSet writes `P.<block>.x`.**
-- **Preset (`Preset.swift`):** `{ id, name, a: PathState, b: PathState, dualOn, levelA/levelB/panA/panB, output,
-  stereo*, bpm, midiOut }`. LEGACY flat presets decode into path A (PathState keeps the old key names; Cab
-  auto-inserted after Amp; `ampALevel…` mapped). `tools/preset_test.swift` proves migration + round-trip.
-- **MIDI:** param + block-toggle mappings act on `AudioEngine.midiPath` (Settings in the MIDI sheet: Path A /
-  Path B / Selected). `MIDIParam.ampALevel/ampBLevel` = the A/B mixer. Looper/tuner/etc. are global.
-- **UI:** chain strip = one row per path (B appears with the "Dual" button / OUT-block toggle). Tiles are
-  `.draggable` (payload `"a|Delay"`) with `.dropDestination` on every tile (insert before) + a tail drop zone
-  (append); dragging across rows = `moveBlock` (the block's settings travel via `PathState.copy`). Long-press →
-  on/off · move to other path · remove. Focused row has a cyan bar; the editor header shows the path badge.
-  **Looper is its own LOOP tile** (after the paths, before OUT) with a transport panel. OUT block = Master, Dual
-  toggle + Level/Pan A/B, stereo widen, per-preset MIDI out. Reorder sheet = the focused path.
-- `SignalChain.split/merge` + `render(from:to:)` remain (tested) but are unused by the render path now.
+### Dual chain A ∥ B with block INSTANCES (2026-09-14) — DONE
+- **Model (`RigPath.swift`):** a path = `PathState { blocks: [BlockInstance] }`; `BlockInstance { id, kind, p:
+  BlockParams }`. **Any kind any number of times** (up to `RigPath.maxPerKind = 4`): two delays, EQ before and after
+  the amp, two amps. `BlockParams` = every param of every kind in one struct (only the instance's kind's fields
+  matter; keeps the legacy flat key names → old presets decode). Default chain = **Gate → Amp** only.
+- **RigPath** owns the DSP objects (`objects[id]`, created in `sync()` from the instance list, prepared at the
+  current SR), a `templates[kind]` fallback object per kind (never rendered) so param writes are always safe, the
+  `focused[kind] → id` map, and per-instance `InstanceMeta` (loaded model id, status, IR file/name) exposed through
+  `loadedModelID / modelStatus / cabIRFile / …` for the focused instance. Typed accessors `P.gate … P.irReverb`
+  return the focused instance's object (or the template).
+- **SignalChain is now lock-free editable LIVE**: double-buffered raw-pointer slot tables + atomic flip
+  (`set(blocks)`); a `graveyard` keeps the last 4 replaced sets alive so a removed block can't be freed mid-render.
+  Two chains (`context.chainA/B`) get the same input; A/B `level × equalPowerPan` → stereo → looper on the mid →
+  widen → out. Dual OFF = the old mono path.
+- **Focus (engine):** flat @Observable params mirror the focused path `P` AND, within it, `P.focused[kind]`.
+  `setFocus(path)` = `capturePath()` (merge flat → focused instances) → switch → `applyPath` (sync objects, push
+  each focused instance's params via `applyParams(p, kind:, force:)`). `focusInstance(id, in:)` refocuses one
+  kind. `addBlock(kind, in:)` → new instance (pre-amp kinds before the first amp) + focus; `removeInstance`,
+  `reorder(ids, in:)`, `moveInstance(id, from:, to:, before:)` (settings travel — it's the same instance),
+  `setEnabled(id, on, in:)` / `isEnabled(id, in:)` for ANY instance, `label(for:in:)` → "2" when duplicated.
+  **Rule: every didSet writes `P.<block>.x`; new block params must be added to BlockParams + copy() +
+  captureAll() + applyParams().**
+- **Preset:** `{ id, name, a, b: PathState, dualOn, levelA/levelB/panA/panB, output, stereo*, bpm, midiOut }`.
+  LEGACY flat presets → path A instances (Cab inserted after Amp; `ampALevel…` mapped). `tools/preset_test.swift`.
+- **MIDI:** param + block-toggle mappings act on `AudioEngine.midiPath` (MIDI sheet: Path A / B / Selected) and
+  on the focused instance of the kind. `MIDIParam.ampALevel/ampBLevel` = the A/B mixer.
+- **UI (`ChainStrip.swift`):** one row per path; tiles are instances ("DLY 2"). Gesture drag: 0.12 s hold lifts,
+  tile follows the finger, others slide open a gap, cross-row re-targets; measured frames live in a reference
+  box (NOT @State — that looped and froze), drop slot = `round((x − origin)/pitch)` from a grid snapshotted at
+  lift. Editor header: path badge, "→ B" move, trash, on/off. LOOP is its own tile with a transport panel. OUT =
+  Master, Dual toggle + Level/Pan A/B, widen, per-preset MIDI out. Reorder sheet = the focused path's instances.
 - TONE3000 on macOS: the `namrig://` scheme is registered in `NamRig/Info.plist` (`INFOPLIST_FILE`, merged with the
   generated plist) — `ASWebAuthenticationSession` on the Mac requires it. Browser sheet has a fixed Mac size
   (`sheetSize`), tone fields are `is_favorite` / `architecture_version`, HTTP ≥ 400 now surfaces as an error.

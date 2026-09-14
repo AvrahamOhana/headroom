@@ -1,7 +1,7 @@
 //
 //  Preset.swift
-//  NamRig — a full rig snapshot: two paths (A ∥ B, each a PathState), the A/B mixer, the output
-//  stage, tempo and the per-preset MIDI-out list. JSON-persisted in Documents.
+//  NamRig — a full rig snapshot: two paths (A ∥ B, each an ordered list of block instances), the
+//  A/B mixer, the output stage, tempo and the per-preset MIDI-out list. JSON-persisted in Documents.
 //
 
 import Foundation
@@ -20,7 +20,7 @@ struct Preset: Codable, Identifiable {
 }
 
 // Tolerant decoder. A LEGACY preset (flat block keys at the top level, no `a`) decodes into path A —
-// `PathState`'s keys were deliberately kept identical to the old flat ones.
+// `PathState` handles that shape itself.
 extension Preset {
     private enum LegacyKeys: String, CodingKey { case dualOn, ampALevel, ampBLevel, ampAPan, ampBPan }
     init(from decoder: Decoder) throws {
@@ -32,8 +32,6 @@ extension Preset {
             a = pa; b = g(.b, b)
         } else {
             a = (try? PathState(from: decoder)) ?? PathState()
-            var ord = a.order.compactMap { BlockKind(rawValue: $0) }
-            if !ord.contains(.cab), let ai = ord.firstIndex(of: .amp) { ord.insert(.cab, at: ord.index(after: ai)); a.order = ord.map { $0.rawValue } }
         }
         dualOn = g(.dualOn, dualOn)
         levelA = g(.levelA, levelA); levelB = g(.levelB, levelB); panA = g(.panA, panA); panB = g(.panB, panB)
@@ -67,12 +65,13 @@ enum PresetStore {
         if let data = try? JSONEncoder().encode(presets) { try? data.write(to: url) }
     }
 
+    /// Factory presets. Default chain is just Gate → Amp; add what you want.
     static var defaults: [Preset] {
         [
             Preset(name: "Clean"),
-            Preset(name: "Crunch", a: PathState(driveOn: true, driveAmt: 12, driveLevel: -2)),
-            Preset(name: "Lead", a: PathState(driveOn: true, driveAmt: 22, delayOn: true, delayMix: 22)),
-            Preset(name: "Ambient", a: PathState(delayOn: true, delayTime: 420, delayMix: 25, reverbOn: true, reverbDecay: 85, reverbMix: 45))
+            Preset(name: "Crunch", a: PathState.make([.gate, .drive, .amp]) { $0.driveAmt = 12; $0.driveLevel = -2 }),
+            Preset(name: "Lead", a: PathState.make([.gate, .drive, .amp, .delay]) { $0.driveAmt = 22; $0.delayMix = 22 }),
+            Preset(name: "Ambient", a: PathState.make([.gate, .amp, .delay, .reverb]) { $0.delayTime = 420; $0.delayMix = 25; $0.reverbDecay = 85; $0.reverbMix = 45 })
         ]
     }
 }

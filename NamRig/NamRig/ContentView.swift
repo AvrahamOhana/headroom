@@ -60,7 +60,7 @@ enum ChainBlock: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @State private var audio = AudioEngine()
-    @State private var selected: ChainBlock? = nil   // nil → no editor shown (clean screen)
+    @State private var selectedID: UUID? = nil        // selected block INSTANCE (nil → no editor)
     @State private var outputSelected = false        // the OUTPUT block's editor (master + stereo)
     @State private var looperSelected = false
     @Environment(\.scenePhase) private var scenePhase
@@ -92,7 +92,7 @@ struct ContentView: View {
                 SignalStrip(audio: audio).frame(maxWidth: .infinity, alignment: .leading)
                 presetBar
                 chainStrip
-                if let sel = selected { editorPanel(sel) }
+                if let sid = selectedID, let found = audio.instance(sid), let cb = ChainBlock(found.inst.kind) { editorPanel(cb, sid, found.path) }
                 else if outputSelected { outputEditorPanel }
                 else if looperSelected { looperPanel }
                 if let err = audio.lastError {
@@ -213,27 +213,27 @@ struct ContentView: View {
     // MARK: - Chain strip (ChainStrip.swift)
 
     private var chainStrip: some View {
-        ChainStripView(audio: audio, selected: $selected, outputSelected: $outputSelected, looperSelected: $looperSelected, showReorder: $showReorder)
+        ChainStripView(audio: audio, selectedID: $selectedID, outputSelected: $outputSelected, looperSelected: $looperSelected, showReorder: $showReorder)
     }
 
     // MARK: - Editor
 
-    private func editorPanel(_ block: ChainBlock) -> some View {
+    private func editorPanel(_ block: ChainBlock, _ iid: UUID, _ path: RigPathID) -> some View {
         VStack(spacing: 12) {
             HStack {
                 if audio.dualOn {
-                    Text(audio.focus.label).font(.caption.bold()).foregroundStyle(.white)
+                    Text(path.label).font(.caption.bold()).foregroundStyle(.white)
                         .padding(.horizontal, 6).padding(.vertical, 2).background(Color.cyan, in: Capsule())
                 }
                 Image(systemName: block.icon).foregroundStyle(isOn(block) ? block.color : .secondary)
-                Text(block.full).font(.headline)
+                Text(audio.label(for: iid, in: path).map { "\(block.full) \($0)" } ?? block.full).font(.headline)
                 Spacer()
-                if audio.dualOn && !audio.order(of: audio.focus.other).contains(block.kind) {
-                    Button { let to = audio.focus.other; audio.moveBlock(block.kind, from: audio.focus, to: to, before: nil); audio.setFocus(to) } label: {
-                        Label("→ \(audio.focus.other.label)", systemImage: "arrow.turn.down.right").font(.caption.bold())
+                if audio.dualOn && audio.availableToAdd(in: path.other).contains(block.kind) {
+                    Button { let to = path.other; audio.moveInstance(iid, from: path, to: to, before: nil); audio.focusInstance(iid, in: to) } label: {
+                        Label("→ \(path.other.label)", systemImage: "arrow.turn.down.right").font(.caption.bold())
                     }.buttonStyle(.bordered).controlSize(.small)
                 }
-                Button { audio.removeBlock(block.kind); selected = nil } label: { Image(systemName: "trash").font(.subheadline) }
+                Button { audio.removeInstance(iid, in: path); selectedID = nil } label: { Image(systemName: "trash").font(.subheadline) }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                 Toggle("", isOn: enabled(block)).labelsHidden().tint(.green)
             }
@@ -472,27 +472,28 @@ struct ContentView: View {
     }
 
     private var reorderSheet: some View {
-        NavigationStack {
+        let path = audio.focus
+        return NavigationStack {
             List {
                 Section {
-                    ForEach(audio.blockOrder, id: \.self) { kind in
-                        if let cb = ChainBlock(kind) {
+                    ForEach(audio.instances(of: path)) { inst in
+                        if let cb = ChainBlock(inst.kind) {
                             HStack(spacing: 12) {
-                                Image(systemName: cb.icon).foregroundStyle(isOn(cb) ? cb.color : .secondary).frame(width: 24)
-                                Text(cb.full)
+                                Image(systemName: cb.icon).foregroundStyle(audio.isEnabled(inst.id, in: path) ? cb.color : .secondary).frame(width: 24)
+                                Text(audio.label(for: inst.id, in: path).map { "\(cb.full) \($0)" } ?? cb.full)
                                 Spacer()
                                 Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary)
                             }
                         }
                     }
-                    .onMove { from, to in var o = audio.blockOrder; o.move(fromOffsets: from, toOffset: to); audio.setOrder(o) }
-                    .onDelete { idx in let kinds = idx.map { audio.blockOrder[$0] }; for k in kinds { audio.removeBlock(k) } }
+                    .onMove { from, to in var ids = audio.instances(of: path).map(\.id); ids.move(fromOffsets: from, toOffset: to); audio.reorder(ids, in: path) }
+                    .onDelete { idx in let ids = idx.map { audio.instances(of: path)[$0].id }; for i in ids { audio.removeInstance(i, in: path) } }
                 } footer: {
-                    Text("Drag to reorder the chain. Signal flows top → bottom (IN → OUT).")
+                    Text("Drag to reorder the chain. Signal flows top → bottom (IN → OUT). Any block can appear more than once.")
                 }
             }
             .alwaysEditing()
-            .navigationTitle(audio.dualOn ? "Chain Order · Path \(audio.focus.label)" : "Chain Order")
+            .navigationTitle(audio.dualOn ? "Chain Order · Path \(path.label)" : "Chain Order")
             .inlineTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showReorder = false } } }
         }

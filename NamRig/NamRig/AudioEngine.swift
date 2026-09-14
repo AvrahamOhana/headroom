@@ -322,12 +322,11 @@ final class AudioEngine {
         P.reverb.configure(type: reverbType, decayPct: reverbDecayPct, dampPct: reverbDampPct, mixPct: reverbMixPct)
     }
 
-    // Free-order chain (of the FOCUSED path) — `blockOrder` is a curated subset of block kinds.
-    static let defaultOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .cab, .eq, .chorus, .flanger, .tremolo, .delay, .reverb, .irReverb]
-    var blockOrder: [BlockKind] = [.gate, .comp, .boost, .drive, .pedal, .amp, .cab, .eq, .chorus, .flanger, .tremolo, .delay, .reverb, .irReverb]
-    func applyOrder() { P.chain.reorder(blockOrder.compactMap { P.indexByKind[$0] }) }
+    /// Kinds in the focused path, in order (compat; the source of truth is `P.state.blocks`).
+    var blockOrder: [BlockKind] { P.state.kinds }
+    func applyOrder() { P.sync() }
 
-    // MARK: - Dual path (A ∥ B) + focus
+    // MARK: - Dual path (A ∥ B), focus, block instances
 
     var dualOn = false { didSet { context.dualEnabled = dualOn } }
     var pathALevelDb: Double = 0 { didSet { updateDualMix(); paramDidChange?(.ampALevel, paramNormalized(.ampALevel)) } }
@@ -342,7 +341,7 @@ final class AudioEngine {
     }
 
     /// Make `id` the path the flat params edit. Snapshots the old path, applies the new one (no
-    /// model reloads when the blocks already hold that model — cheap enough to do per MIDI message).
+    /// model reloads when the objects already hold that model — cheap enough to do per MIDI message).
     func setFocus(_ id: RigPathID) {
         guard id != focusRaw else { return }
         P.state = capturePath()
@@ -354,48 +353,44 @@ final class AudioEngine {
         let prev = focusRaw
         setFocus(id); body(); setFocus(prev)
     }
-    func order(of id: RigPathID) -> [BlockKind] { id == focusRaw ? blockOrder : path(id).state.kinds }
-    func isBlockEnabled(_ kind: BlockKind, in id: RigPathID) -> Bool { id == focusRaw ? isBlockEnabled(kind) : path(id).state.isOn(kind) }
-    func setBlockEnabled(_ kind: BlockKind, _ on: Bool, in id: RigPathID) { withFocus(id) { setBlockEnabled(kind, on) } }
-    func availableToAdd(in id: RigPathID) -> [BlockKind] { BlockKind.allCases.filter { !order(of: id).contains($0) } }
-    func addBlock(_ kind: BlockKind, in id: RigPathID) { withFocus(id) { addBlock(kind) } }
-    func removeBlock(_ kind: BlockKind, in id: RigPathID) { withFocus(id) { removeBlock(kind) } }
-    /// Drag & drop: move `kind` from one path to (before `before` in) another, or reorder within a path.
-    /// Across paths the block's settings travel with it.
-    func moveBlock(_ kind: BlockKind, from: RigPathID, to: RigPathID, before: BlockKind?) {
-        if from == to {
-            withFocus(to) {
-                var o = blockOrder; o.removeAll { $0 == kind }
-                if let b = before, let i = o.firstIndex(of: b) { o.insert(kind, at: i) } else { o.append(kind) }
-                setOrder(o)
-            }
-            return
-        }
-        guard !order(of: to).contains(kind) else { return }
-        withFocus(from) { path(from).state = capturePath(); removeBlock(kind) }
-        let src = path(from).state
-        withFocus(to) {
-            var st = capturePath(); st.copy(kind, from: src)
-            applyPath(st, force: false)
-            var o = blockOrder
-            if let b = before, let i = o.firstIndex(of: b) { o.insert(kind, at: i) } else { o.append(kind) }
-            setOrder(o)
-        }
+    /// Make one instance the focused one of its kind (the knobs edit it).
+    func focusInstance(_ iid: UUID, in id: RigPathID) {
+        setFocus(id)
+        guard let inst = P.state.instance(iid), P.focused[inst.kind] != iid else { return }
+        P.state = capturePath()
+        P.focused[inst.kind] = iid
+        applyParams(inst.p, kind: inst.kind, force: false)
     }
-    func setOrder(_ newOrder: [BlockKind]) { blockOrder = newOrder; applyOrder() }
-    var availableToAdd: [BlockKind] { BlockKind.allCases.filter { !blockOrder.contains($0) } }
-    func addBlock(_ kind: BlockKind) {
-        guard !blockOrder.contains(kind) else { return }
-        // Drive-family / pre-amp blocks belong in FRONT of the amp; everything else appends to the tail.
-        let preAmp: Set<BlockKind> = [.gate, .comp, .boost, .drive, .stomp, .wah, .pedal]
-        if preAmp.contains(kind), let ampIdx = blockOrder.firstIndex(of: .amp) {
-            blockOrder.insert(kind, at: ampIdx)
-        } else {
-            blockOrder.append(kind)
-        }
-        setBlockEnabled(kind, true); applyOrder()
+
+    func order(of id: RigPathID) -> [BlockKind] { path(id).state.kinds }
+    func instances(of id: RigPathID) -> [BlockInstance] { path(id).state.blocks }
+    /// Find an instance in either path.
+    func instance(_ iid: UUID) -> (inst: BlockInstance, path: RigPathID)? {
+        for id in RigPathID.allCases { if let i = path(id).state.instance(iid) { return (i, id) } }
+        return nil
     }
-    func removeBlock(_ kind: BlockKind) { blockOrder.removeAll { $0 == kind }; applyOrder() }
+    /// "Delay 2" when a kind appears more than once in the path.
+    func label(for iid: UUID, in id: RigPathID) -> String? {
+        let st = path(id).state
+        guard let inst = st.instance(iid) else { return nil }
+        let same = st.blocks.filter { $0.kind == inst.kind }
+        guard same.count > 1, let n = same.firstIndex(where: { $0.id == iid }) else { return nil }
+        return "\(n + 1)"
+    }
+    func isEnabled(_ iid: UUID, in id: RigPathID) -> Bool {
+        guard let inst = path(id).state.instance(iid) else { return false }
+        if id == focusRaw && P.focused[inst.kind] == iid { return isBlockEnabled(inst.kind) }
+        return inst.isOn
+    }
+    func setEnabled(_ iid: UUID, _ on: Bool, in id: RigPathID) {
+        let rp = path(id)
+        guard let i = rp.state.index(of: iid) else { return }
+        let inst = rp.state.blocks[i]
+        if id == focusRaw && P.focused[inst.kind] == iid { setBlockEnabled(inst.kind, on); return }
+        rp.state.blocks[i].p.setOn(inst.kind, on)
+        rp.object(iid)?.bypass.store(!on, ordering: .relaxed)
+    }
+    /// On/off of the FOCUSED instance of `kind` (the flat props).
     func setBlockEnabled(_ kind: BlockKind, _ on: Bool) {
         switch kind {
         case .gate: gateEnabled = on; case .comp: compEnabled = on; case .boost: boostEnabled = on
@@ -413,6 +408,69 @@ final class AudioEngine {
         case .tremolo: return tremoloEnabled; case .delay: return delayEnabled; case .reverb: return reverbEnabled
         case .irReverb: return irReverbEnabled
         }
+    }
+    func isBlockEnabled(_ kind: BlockKind, in id: RigPathID) -> Bool {
+        id == focusRaw ? isBlockEnabled(kind) : (path(id).state.first(of: kind)?.isOn ?? false)
+    }
+    func setBlockEnabled(_ kind: BlockKind, _ on: Bool, in id: RigPathID) { withFocus(id) { setBlockEnabled(kind, on) } }
+    func availableToAdd(in id: RigPathID) -> [BlockKind] {
+        let st = path(id).state
+        return BlockKind.allCases.filter { k in st.blocks.filter { $0.kind == k }.count < RigPath.maxPerKind }
+    }
+    var availableToAdd: [BlockKind] { availableToAdd(in: focusRaw) }
+
+    /// Add a NEW instance of `kind` (any number per kind, up to `RigPath.maxPerKind`). Pre-amp kinds go
+    /// in front of the first amp; everything else appends. Returns the instance id and focuses it.
+    @discardableResult
+    func addBlock(_ kind: BlockKind, in id: RigPathID) -> UUID? {
+        guard availableToAdd(in: id).contains(kind) else { return nil }
+        setFocus(id)
+        P.state = capturePath()
+        let inst = BlockInstance(kind: kind)
+        let preAmp: Set<BlockKind> = [.gate, .comp, .boost, .drive, .stomp, .wah, .pedal]
+        if preAmp.contains(kind), let ai = P.state.blocks.firstIndex(where: { $0.kind == .amp }) { P.state.blocks.insert(inst, at: ai) }
+        else { P.state.blocks.append(inst) }
+        P.focused[kind] = inst.id
+        P.sync()
+        applyParams(inst.p, kind: kind, force: false)
+        return inst.id
+    }
+    @discardableResult func addBlock(_ kind: BlockKind) -> UUID? { addBlock(kind, in: focusRaw) }
+    func removeInstance(_ iid: UUID, in id: RigPathID) {
+        let rp = path(id)
+        guard let kind = rp.state.instance(iid)?.kind else { return }
+        if id == focusRaw { P.state = capturePath() }
+        rp.state.blocks.removeAll { $0.id == iid }
+        rp.sync()
+        // Focus of that kind fell to another instance → its params must land in the knobs.
+        if id == focusRaw, let inst = P.focusedInstance(kind) { applyParams(inst.p, kind: kind, force: false) }
+    }
+    func removeBlock(_ kind: BlockKind) { if let f = P.focused[kind] { removeInstance(f, in: focusRaw) } }
+    func removeBlock(_ kind: BlockKind, in id: RigPathID) { if let f = path(id).focused[kind] { removeInstance(f, in: id) } }
+    func reorder(_ ids: [UUID], in id: RigPathID) {
+        let rp = path(id)
+        let by = Dictionary(uniqueKeysWithValues: rp.state.blocks.map { ($0.id, $0) })
+        rp.state.blocks = ids.compactMap { by[$0] } + rp.state.blocks.filter { !ids.contains($0.id) }
+        rp.sync()
+    }
+    /// Drag & drop: move an instance within a path or to the other path (its settings travel with it).
+    func moveInstance(_ iid: UUID, from: RigPathID, to: RigPathID, before: UUID?) {
+        if from == focusRaw { P.state = capturePath() }
+        let src = path(from)
+        guard let i = src.state.index(of: iid) else { return }
+        let inst = src.state.blocks[i]
+        if from == to {
+            var b = src.state.blocks; b.remove(at: i)
+            if let bf = before, let j = b.firstIndex(where: { $0.id == bf }) { b.insert(inst, at: j) } else { b.append(inst) }
+            src.state.blocks = b; src.sync(); return
+        }
+        let dst = path(to)
+        guard dst.state.blocks.filter({ $0.kind == inst.kind }).count < RigPath.maxPerKind else { return }
+        src.state.blocks.remove(at: i); src.sync()
+        if let bf = before, let j = dst.state.index(of: bf) { dst.state.blocks.insert(inst, at: j) } else { dst.state.blocks.append(inst) }
+        dst.sync()
+        // Whichever path is focused may have gained/lost the focused instance of that kind → refresh its knobs.
+        if let f = P.focusedInstance(inst.kind) { applyParams(f.p, kind: inst.kind, force: false) }
     }
 
     var modelLoaded: Bool { P.amp.hasModel }
@@ -451,9 +509,9 @@ final class AudioEngine {
         pathB = RigPath(id: .b, chain: context.chainB)
         refreshModels()
         if !models.contains(where: { $0.id == selectedModelID }) { selectedModelID = models.first?.id ?? selectedModelID }
-        // Configure BOTH paths' blocks from the default state, then leave A focused.
-        var initial = capturePath(); initial.model = selectedModelID
-        pathB.state = initial
+        // Configure BOTH paths from the default chain (Gate → Amp), then leave A focused.
+        var initial = PathState()
+        for i in initial.blocks.indices where initial.blocks[i].kind == .amp { initial.blocks[i].p.model = selectedModelID }
         focusRaw = .b; applyPath(initial, force: false)
         focusRaw = .a; applyPath(initial, force: false)
         context.outputGain = powf(10, Float(outputLevelDb) / 20)
@@ -745,9 +803,9 @@ final class AudioEngine {
         PresetStore.save(presets)
     }
 
-    /// Snapshot the FOCUSED path's params.
-    func capturePath() -> PathState {
-        var s = PathState()
+    /// All flat params as one BlockParams (the focused instances' values).
+    private func captureAll() -> BlockParams {
+        var s = BlockParams()
         s.model = selectedModelID
         s.ampOn = ampEnabled; s.ampDrive = inputDriveDb
         s.gateOn = gateEnabled; s.gateThr = gateThresholdDb; s.gateRel = gateReleaseMs; s.gateRange = gateRangeDb
@@ -762,7 +820,6 @@ final class AudioEngine {
         s.chorusOn = chorusEnabled; s.chorusRate = chorusRateHz; s.chorusDepth = chorusDepthMs; s.chorusMix = chorusMixPct
         s.flangerOn = flangerEnabled; s.flangerRate = flangerRateHz; s.flangerDepth = flangerDepthMs; s.flangerFb = flangerFeedbackPct; s.flangerMix = flangerMixPct
         s.tremoloOn = tremoloEnabled; s.tremoloRate = tremoloRateHz; s.tremoloDepth = tremoloDepthPct
-        s.order = blockOrder.map { $0.rawValue }
         s.pedalOn = pedalEnabled; s.pedalModel = selectedPedalModelID ?? ""; s.pedalDrive = pedalDriveDb; s.pedalLevel = pedalLevelDb
         s.cabOn = cabEnabled; s.cabIR = P.cabIRFile
         s.irReverbOn = irReverbEnabled; s.irReverbMix = irReverbMixPct; s.irReverbPredelay = irReverbPredelayMs; s.irReverbIR = P.irReverbFile
@@ -770,38 +827,54 @@ final class AudioEngine {
         return s
     }
 
-    /// Push a PathState into the FOCUSED path's flat params (→ its blocks). `force` reloads models /
-    /// IRs even if already loaded (preset load = fresh state); focus switches pass false.
-    private func applyPath(_ s: PathState, force: Bool) {
+    /// Snapshot the FOCUSED path: its instance list with the focused instances refreshed from the flat params.
+    func capturePath() -> PathState {
+        var st = P.state
+        let all = captureAll()
+        for (k, fid) in P.focused { if let i = st.index(of: fid), st.blocks[i].kind == k { st.blocks[i].p.copy(k, from: all) } }
+        return st
+    }
+
+    /// Push one kind's params into the flat props (→ the focused instance's DSP object). `force`
+    /// reloads models / IRs even if already loaded (preset load = fresh state).
+    private func applyParams(_ p: BlockParams, kind: BlockKind, force: Bool) {
         let feedback = paramDidChange; paramDidChange = nil
-        defer { paramDidChange = feedback; P.delay.snapTime() }
-        selectedModelID = s.model
-        if force { loadModel(force: true) }
-        ampEnabled = s.ampOn; inputDriveDb = s.ampDrive
-        gateEnabled = s.gateOn; gateThresholdDb = s.gateThr; gateReleaseMs = s.gateRel; gateRangeDb = s.gateRange
-        compEnabled = s.compOn; compThresholdDb = s.compThr; compRatio = s.compRatio; compAttackMs = s.compAtk; compReleaseMs = s.compRel; compMakeupDb = s.compMakeup
-        driveEnabled = s.driveOn; driveAmount = s.driveAmt; driveToneHz = s.driveTone; driveLevelDb = s.driveLevel; driveMode = s.driveMode
-        eqEnabled = s.eqOn; bassDb = s.bass; midDb = s.mid; trebleDb = s.treble
-        delayEnabled = s.delayOn; delayTimeMs = s.delayTime; delayFeedbackPct = s.delayFb; delayMixPct = s.delayMix; delayTonePct = s.delayTone
-        delayDivision = s.delayDiv; delaySync = s.delaySync
-        reverbEnabled = s.reverbOn; reverbDecayPct = s.reverbDecay; reverbDampPct = s.reverbDamp; reverbMixPct = s.reverbMix; reverbType = s.reverbType
-        boostEnabled = s.boostOn; boostDb = s.boostDb
-        stompEnabled = s.stompOn; stompModel = s.stompModel; stompDrive = s.stompDrive; stompTone = s.stompTone; stompLevel = s.stompLevel
-        chorusEnabled = s.chorusOn; chorusRateHz = s.chorusRate; chorusDepthMs = s.chorusDepth; chorusMixPct = s.chorusMix
-        flangerEnabled = s.flangerOn; flangerRateHz = s.flangerRate; flangerDepthMs = s.flangerDepth; flangerFeedbackPct = s.flangerFb; flangerMixPct = s.flangerMix
-        tremoloEnabled = s.tremoloOn; tremoloRateHz = s.tremoloRate; tremoloDepthPct = s.tremoloDepth
-        var ord = s.kinds
-        if ord.isEmpty { ord = AudioEngine.defaultOrder }
-        blockOrder = ord
-        applyOrder()
-        pedalEnabled = s.pedalOn; pedalDriveDb = s.pedalDrive; pedalLevelDb = s.pedalLevel
-        selectedPedalModelID = s.pedalModel.isEmpty ? nil : s.pedalModel
-        if force { loadPedalModel(force: true) }
-        cabEnabled = s.cabOn
-        applyCabIR(s.cabIR, force: force)
-        irReverbEnabled = s.irReverbOn; irReverbMixPct = s.irReverbMix; irReverbPredelayMs = s.irReverbPredelay
-        applyReverbIR(s.irReverbIR, force: force)
-        wahEnabled = s.wahOn; wahPosition = s.wahPos; wahAuto = s.wahAuto; wahSense = s.wahSense; wahMix = s.wahMix
+        defer { paramDidChange = feedback }
+        switch kind {
+        case .amp:
+            selectedModelID = p.model
+            if force { loadModel(force: true) }
+            ampEnabled = p.ampOn; inputDriveDb = p.ampDrive
+        case .gate: gateEnabled = p.gateOn; gateThresholdDb = p.gateThr; gateReleaseMs = p.gateRel; gateRangeDb = p.gateRange
+        case .comp: compEnabled = p.compOn; compThresholdDb = p.compThr; compRatio = p.compRatio; compAttackMs = p.compAtk; compReleaseMs = p.compRel; compMakeupDb = p.compMakeup
+        case .drive: driveEnabled = p.driveOn; driveAmount = p.driveAmt; driveToneHz = p.driveTone; driveLevelDb = p.driveLevel; driveMode = p.driveMode
+        case .eq: eqEnabled = p.eqOn; bassDb = p.bass; midDb = p.mid; trebleDb = p.treble
+        case .delay:
+            delayEnabled = p.delayOn; delayTimeMs = p.delayTime; delayFeedbackPct = p.delayFb; delayMixPct = p.delayMix; delayTonePct = p.delayTone
+            delayDivision = p.delayDiv; delaySync = p.delaySync
+            P.delay.snapTime()
+        case .reverb: reverbEnabled = p.reverbOn; reverbDecayPct = p.reverbDecay; reverbDampPct = p.reverbDamp; reverbMixPct = p.reverbMix; reverbType = p.reverbType
+        case .boost: boostEnabled = p.boostOn; boostDb = p.boostDb
+        case .stomp: stompEnabled = p.stompOn; stompModel = p.stompModel; stompDrive = p.stompDrive; stompTone = p.stompTone; stompLevel = p.stompLevel
+        case .chorus: chorusEnabled = p.chorusOn; chorusRateHz = p.chorusRate; chorusDepthMs = p.chorusDepth; chorusMixPct = p.chorusMix
+        case .flanger: flangerEnabled = p.flangerOn; flangerRateHz = p.flangerRate; flangerDepthMs = p.flangerDepth; flangerFeedbackPct = p.flangerFb; flangerMixPct = p.flangerMix
+        case .tremolo: tremoloEnabled = p.tremoloOn; tremoloRateHz = p.tremoloRate; tremoloDepthPct = p.tremoloDepth
+        case .pedal:
+            pedalEnabled = p.pedalOn; pedalDriveDb = p.pedalDrive; pedalLevelDb = p.pedalLevel
+            selectedPedalModelID = p.pedalModel.isEmpty ? nil : p.pedalModel
+            if force { loadPedalModel(force: true) }
+        case .cab: cabEnabled = p.cabOn; applyCabIR(p.cabIR, force: force)
+        case .irReverb: irReverbEnabled = p.irReverbOn; irReverbMixPct = p.irReverbMix; irReverbPredelayMs = p.irReverbPredelay; applyReverbIR(p.irReverbIR, force: force)
+        case .wah: wahEnabled = p.wahOn; wahPosition = p.wahPos; wahAuto = p.wahAuto; wahSense = p.wahSense; wahMix = p.wahMix
+        }
+    }
+
+    /// Install a PathState into the FOCUSED path: objects synced to the instance list, then every
+    /// focused instance's params pushed into the flat props.
+    private func applyPath(_ st: PathState, force: Bool) {
+        P.state = st
+        P.sync()
+        for k in BlockKind.allCases { if let inst = P.focusedInstance(k) { applyParams(inst.p, kind: k, force: force) } }
     }
 
     private func capture(name: String) -> Preset {
@@ -910,9 +983,8 @@ final class AudioEngine {
         }
 
         context.ring.reset()
-        context.chainA.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096)
-        context.chainA.reset()
-        context.chainB.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096); context.chainB.reset()
+        pathA.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096); pathA.reset()
+        pathB.prepare(sampleRate: inputFormat.sampleRate, maxBlock: 4096); pathB.reset()
         context.gAL.prepare(sampleRate: inputFormat.sampleRate, ms: 10); context.gAR.prepare(sampleRate: inputFormat.sampleRate, ms: 10)
         context.gBL.prepare(sampleRate: inputFormat.sampleRate, ms: 10); context.gBR.prepare(sampleRate: inputFormat.sampleRate, ms: 10)
         context.gAL.snap(); context.gAR.snap(); context.gBL.snap(); context.gBR.snap()

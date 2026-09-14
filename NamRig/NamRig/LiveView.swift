@@ -112,8 +112,9 @@ struct LiveView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 5) {
                         if audio.dualOn { Text(id.label).font(.system(size: 11, weight: .black, design: .rounded)).foregroundStyle(.secondary).frame(width: 14) }
-                        ForEach(audio.order(of: id).compactMap { ChainBlock($0) }) { b in
-                            let on = audio.isBlockEnabled(b.kind, in: id)
+                        ForEach(audio.instances(of: id)) { inst in
+                            let b = ChainBlock(inst.kind) ?? .amp
+                            let on = audio.isEnabled(inst.id, in: id)
                             VStack(spacing: 3) {
                                 Image(systemName: b.icon).font(.system(size: 13, weight: .semibold))
                                 Text(b.short).font(.system(size: 7, weight: .heavy))

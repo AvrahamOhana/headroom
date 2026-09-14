@@ -1,20 +1,20 @@
 //
 //  ChainStrip.swift
 //  NamRig — the signal-chain strip: one draggable row per path (A / B), LOOP + OUT tiles.
+//  Tiles are block INSTANCES (a kind can appear several times).
 //
 //  Drag & drop is gesture-driven (not the system drag session): a short hold lifts the tile, it
 //  follows the finger, the other tiles slide open a gap live (placeholder), and moving the finger
-//  onto the other row re-targets it. Tile frames are collected through a PreferenceKey in the strip's
-//  own coordinate space, so scrolled rows still hit-test correctly. The engine is only touched once,
-//  on release (`moveBlock`).
+//  onto the other row re-targets it. Measured geometry lives in a reference box (never @State) and
+//  the drop slot comes from a fixed grid snapshotted at lift, so nothing re-measures mid-drag. The
+//  engine is touched once, on release (`moveInstance`).
 //
 
 import SwiftUI
 
-private struct TileKey: Hashable { let path: RigPathID; let kind: BlockKind }
 private struct TileFramesKey: PreferenceKey {
-    static let defaultValue: [TileKey: CGRect] = [:]
-    static func reduce(value: inout [TileKey: CGRect], nextValue: () -> [TileKey: CGRect]) { value.merge(nextValue()) { $1 } }
+    static let defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) { value.merge(nextValue()) { $1 } }
 }
 private struct RowFramesKey: PreferenceKey {
     static let defaultValue: [RigPathID: CGRect] = [:]
@@ -23,25 +23,21 @@ private struct RowFramesKey: PreferenceKey {
 
 struct ChainStripView: View {
     let audio: AudioEngine
-    @Binding var selected: ChainBlock?
+    @Binding var selectedID: UUID?
     @Binding var outputSelected: Bool
     @Binding var looperSelected: Bool
     @Binding var showReorder: Bool
 
     private struct Drag {
-        let kind: BlockKind
+        let inst: BlockInstance
         let from: RigPathID
-        var location: CGPoint          // finger, in strip space
-        var grabOffset: CGSize         // finger − tile center at lift
+        var location: CGPoint
+        var grabOffset: CGSize
         var target: (path: RigPathID, index: Int)?
         var lifted = false
-        /// Center x of slot 0 per row, snapshotted at lift. Slots are a uniform grid (tile + connector),
-        /// so the drop index is `round((x − origin) / pitch)` — deterministic, no re-measuring mid-drag.
-        var origins: [RigPathID: CGFloat] = [:]
+        var origins: [RigPathID: CGFloat] = [:]   // center x of slot 0 per row, snapshotted at lift
     }
-    /// Measured geometry lives in a reference box, NOT @State: writing it from a preference change
-    /// must not invalidate the view (that was a layout→measure→layout loop that froze the UI).
-    private final class FrameStore { var tiles: [TileKey: CGRect] = [:]; var rows: [RigPathID: CGRect] = [:] }
+    private final class FrameStore { var tiles: [UUID: CGRect] = [:]; var rows: [RigPathID: CGRect] = [:] }
     @State private var drag: Drag? = nil
     @State private var frames = FrameStore()
     private let tileW: CGFloat = 58, tileH: CGFloat = 74
@@ -53,9 +49,7 @@ struct ChainStripView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 12) {
                 Text("SIGNAL CHAIN").font(.caption.bold()).foregroundStyle(.secondary)
-                if audio.dualOn {
-                    Text("drag tiles between A and B").font(.caption2).foregroundStyle(.tertiary)
-                }
+                Text(audio.dualOn ? "hold a tile to drag · rows A and B" : "hold a tile to drag").font(.caption2).foregroundStyle(.tertiary)
                 Spacer()
                 Button { audio.dualOn.toggle(); Haptics.impact(.medium) } label: {
                     Label(audio.dualOn ? "A ∥ B" : "Dual", systemImage: audio.dualOn ? "rectangle.split.1x2.fill" : "rectangle.split.1x2")
@@ -85,27 +79,26 @@ struct ChainStripView: View {
 
     // MARK: rows
 
-    /// The order a row DISPLAYS while dragging: the dragged tile is pulled out and a gap (nil) is
-    /// opened at the target index.
-    private func displayOrder(_ id: RigPathID) -> [BlockKind?] {
-        var kinds: [BlockKind?] = audio.order(of: id)
-        guard let d = drag, d.lifted else { return kinds }
-        kinds.removeAll { $0 == d.kind }
-        if let t = d.target, t.path == id { kinds.insert(nil, at: min(t.index, kinds.count)) }
-        return kinds
+    /// The order a row DISPLAYS while dragging: the dragged tile is pulled out and a gap (nil) opened at the target.
+    private func displayOrder(_ id: RigPathID) -> [BlockInstance?] {
+        var items: [BlockInstance?] = audio.instances(of: id)
+        guard let d = drag, d.lifted else { return items }
+        items.removeAll { $0?.id == d.inst.id }
+        if let t = d.target, t.path == id { items.insert(nil, at: min(t.index, items.count)) }
+        return items
     }
 
     private func pathRow(_ id: RigPathID) -> some View {
         let order = displayOrder(id)
         return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
+            HStack(spacing: spacing) {
                 endLabel(audio.dualOn ? id.label : "IN")
-                ForEach(Array(order.enumerated()), id: \.offset) { i, kind in
+                ForEach(Array(order.enumerated()), id: \.offset) { _, item in
                     connector
-                    if let kind, let cb = ChainBlock(kind) {
-                        tile(cb, in: id)
+                    if let inst = item, let cb = ChainBlock(inst.kind) {
+                        tile(inst, cb, in: id)
                             .background(GeometryReader { g in
-                                Color.clear.preference(key: TileFramesKey.self, value: [TileKey(path: id, kind: kind): g.frame(in: .named(space))])
+                                Color.clear.preference(key: TileFramesKey.self, value: [inst.id: g.frame(in: .named(space))])
                             })
                     } else {
                         gap
@@ -115,7 +108,7 @@ struct ChainStripView: View {
                 addTile(id)
             }
             .padding(.vertical, 2)
-            .animation(.snappy(duration: 0.22), value: order.map { $0?.rawValue ?? "·" })
+            .animation(.snappy(duration: 0.22), value: order.map { $0?.id.uuidString ?? "·" })
         }
         .background(GeometryReader { g in Color.clear.preference(key: RowFramesKey.self, value: [id: g.frame(in: .named(space))]) })
         .overlay(alignment: .leading) {
@@ -140,10 +133,10 @@ struct ChainStripView: View {
 
     // MARK: tiles
 
-    private func tileFace(_ block: ChainBlock, on: Bool, selected sel: Bool) -> some View {
+    private func tileFace(_ block: ChainBlock, suffix: String?, on: Bool, selected sel: Bool) -> some View {
         VStack(spacing: 6) {
             Image(systemName: block.icon).font(.system(size: 20, weight: .semibold))
-            Text(block.short).font(.system(size: 10, weight: .heavy))
+            Text(suffix.map { "\(block.short) \($0)" } ?? block.short).font(.system(size: 10, weight: .heavy))
         }
         .frame(width: tileW, height: tileH)
         .foregroundStyle(on ? .white : .white.opacity(0.3))
@@ -151,35 +144,34 @@ struct ChainStripView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(sel ? .white : .clear, lineWidth: 2))
     }
 
-    private func tile(_ block: ChainBlock, in id: RigPathID) -> some View {
-        let on = audio.isBlockEnabled(block.kind, in: id), sel = selected == block && audio.focus == id
-        return tileFace(block, on: on, selected: sel)
+    private func tile(_ inst: BlockInstance, _ block: ChainBlock, in id: RigPathID) -> some View {
+        let on = audio.isEnabled(inst.id, in: id), sel = selectedID == inst.id
+        return tileFace(block, suffix: audio.label(for: inst.id, in: id), on: on, selected: sel)
             .contentShape(RoundedRectangle(cornerRadius: 12))
             .onTapGesture {
-                audio.setFocus(id)
-                selected = (sel ? nil : block); outputSelected = false; looperSelected = false
+                audio.focusInstance(inst.id, in: id)
+                selectedID = sel ? nil : inst.id; outputSelected = false; looperSelected = false
             }
-            .gesture(dragGesture(block.kind, in: id))
+            .gesture(dragGesture(inst, in: id))
             .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 
     /// Short hold (so horizontal scrolling still works), then the tile follows the finger.
-    private func dragGesture(_ kind: BlockKind, in id: RigPathID) -> some Gesture {
+    private func dragGesture(_ inst: BlockInstance, in id: RigPathID) -> some Gesture {
         LongPressGesture(minimumDuration: 0.12, maximumDistance: 12)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(space)))
             .onChanged { value in
                 guard case .second(true, let g?) = value else { return }
                 if drag == nil {
-                    let center = frames.tiles[TileKey(path: id, kind: kind)].map { CGPoint(x: $0.midX, y: $0.midY) } ?? g.startLocation
-                    var d = Drag(kind: kind, from: id, location: g.location,
+                    let center = frames.tiles[inst.id].map { CGPoint(x: $0.midX, y: $0.midY) } ?? g.startLocation
+                    var d = Drag(inst: inst, from: id, location: g.location,
                                  grabOffset: CGSize(width: g.startLocation.x - center.x, height: g.startLocation.y - center.y))
-                    // Slot-0 origin per row from the tiles as laid out right now (nothing is animating yet).
                     for row in (audio.dualOn ? RigPathID.allCases : [.a]) {
-                        let order = audio.order(of: row)
-                        if let (i, f) = order.enumerated().compactMap({ i, k in frames.tiles[TileKey(path: row, kind: k)].map { (i, $0) } }).first {
+                        let list = audio.instances(of: row)
+                        if let (i, f) = list.enumerated().compactMap({ i, b in frames.tiles[b.id].map { (i, $0) } }).first {
                             d.origins[row] = f.midX - CGFloat(i) * pitch
                         } else if let rf = frames.rows[row] {
-                            d.origins[row] = rf.minX + 26 + spacing + connectorW + spacing + tileW / 2   // empty row: after the end label
+                            d.origins[row] = rf.minX + 26 + spacing + connectorW + spacing + tileW / 2
                         }
                     }
                     drag = d
@@ -195,16 +187,15 @@ struct ChainStripView: View {
     private func retarget(_ p: CGPoint) {
         guard var d = drag else { return }
         let rows = audio.dualOn ? RigPathID.allCases : [.a]
-        // Row: the one whose vertical band is nearest the finger.
         let row = rows.min { a, b in
             let fa = frames.rows[a] ?? .zero, fb = frames.rows[b] ?? .zero
             return abs(p.y - fa.midY) < abs(p.y - fb.midY)
         } ?? d.from
-        if row != d.from && audio.order(of: row).contains(d.kind) {            // that path already has one
+        if row != d.from && !audio.availableToAdd(in: row).contains(d.inst.kind) {   // that path is full of this kind
             if d.target != nil { d.target = nil; drag = d }
             return
         }
-        let others = audio.order(of: row).filter { $0 != d.kind }
+        let others = audio.instances(of: row).filter { $0.id != d.inst.id }
         let origin = d.origins[row] ?? p.x
         let idx = max(0, min(others.count, Int(((p.x - origin) / pitch).rounded())))
         let new = (path: row, index: idx)
@@ -218,21 +209,20 @@ struct ChainStripView: View {
         guard let d = drag else { return }
         withAnimation(.snappy(duration: 0.22)) { drag = nil }
         guard let t = d.target else { return }
-        let others = audio.order(of: t.path).filter { $0 != d.kind }
-        let before = t.index < others.count ? others[t.index] : nil
+        let others = audio.instances(of: t.path).filter { $0.id != d.inst.id }
+        let before = t.index < others.count ? others[t.index].id : nil
         if t.path == d.from {
-            var proposed = others; proposed.insert(d.kind, at: min(t.index, others.count))
-            if proposed == audio.order(of: d.from) { return }      // dropped where it was
+            var proposed = others.map(\.id); proposed.insert(d.inst.id, at: min(t.index, others.count))
+            if proposed == audio.instances(of: d.from).map(\.id) { return }
         }
-        audio.moveBlock(d.kind, from: d.from, to: t.path, before: before)
-        if selected?.kind == d.kind { audio.setFocus(t.path) }
+        audio.moveInstance(d.inst.id, from: d.from, to: t.path, before: before)
+        if selectedID == d.inst.id { audio.focusInstance(d.inst.id, in: t.path) }
         Haptics.impact(.light)
     }
 
-    /// The tile that follows the finger, drawn above everything in the strip's coordinate space.
     @ViewBuilder private var liftedTile: some View {
-        if let d = drag, d.lifted, let cb = ChainBlock(d.kind) {
-            tileFace(cb, on: audio.isBlockEnabled(d.kind, in: d.from), selected: false)
+        if let d = drag, d.lifted, let cb = ChainBlock(d.inst.kind) {
+            tileFace(cb, suffix: nil, on: audio.isEnabled(d.inst.id, in: d.from), selected: false)
                 .scaleEffect(1.08)
                 .shadow(color: .black.opacity(0.35), radius: 10, y: 6)
                 .opacity(d.target == nil ? 0.5 : 1)
@@ -246,7 +236,9 @@ struct ChainStripView: View {
         return Menu {
             ForEach(avail, id: \.self) { kind in
                 if let cb = ChainBlock(kind) {
-                    Button { audio.addBlock(kind, in: id); audio.setFocus(id); selected = cb; outputSelected = false; looperSelected = false } label: { Label(cb.full, systemImage: cb.icon) }
+                    Button {
+                        if let nid = audio.addBlock(kind, in: id) { selectedID = nid; outputSelected = false; looperSelected = false }
+                    } label: { Label(cb.full, systemImage: cb.icon) }
                 }
             }
         } label: {
@@ -264,7 +256,7 @@ struct ChainStripView: View {
 
     private var looperTile: some View {
         let active = audio.looperStateLabel != "Idle"
-        return Button { looperSelected.toggle(); outputSelected = false; selected = nil } label: {
+        return Button { looperSelected.toggle(); outputSelected = false; selectedID = nil } label: {
             VStack(spacing: 6) {
                 Image(systemName: "repeat.circle.fill").font(.system(size: 20, weight: .semibold))
                 Text("LOOP").font(.system(size: 10, weight: .heavy))
@@ -278,7 +270,7 @@ struct ChainStripView: View {
     }
 
     private var outputTile: some View {
-        Button { outputSelected.toggle(); selected = nil; looperSelected = false } label: {
+        Button { outputSelected.toggle(); selectedID = nil; looperSelected = false } label: {
             VStack(spacing: 6) {
                 Image(systemName: "slider.horizontal.3").font(.system(size: 20, weight: .semibold))
                 Text("OUT").font(.system(size: 10, weight: .heavy))
@@ -294,5 +286,5 @@ struct ChainStripView: View {
     private func endLabel(_ t: String) -> some View {
         Text(t).font(.caption2.bold()).foregroundStyle(.secondary).frame(width: 26, height: tileH)
     }
-    private var connector: some View { Rectangle().fill(.secondary.opacity(0.4)).frame(width: 6, height: 2) }
+    private var connector: some View { Rectangle().fill(.secondary.opacity(0.4)).frame(width: connectorW, height: 2) }
 }
