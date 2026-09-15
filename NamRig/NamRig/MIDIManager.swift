@@ -262,6 +262,7 @@ nonisolated final class ClockCounter: @unchecked Sendable {
         var names: [String] = []
         for i in 0..<MIDIGetNumberOfSources() {
             let src = MIDIGetSource(i)
+            if src == virtualOut { continue }              // never listen to our own output (feedback loop)
             MIDIPortConnectSource(inPort, src, nil)
             names.append(displayName(of: src))
         }

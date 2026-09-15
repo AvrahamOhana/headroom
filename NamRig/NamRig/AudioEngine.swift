@@ -8,6 +8,9 @@
 import AVFoundation
 import Observation
 import Synchronization
+import os
+
+let engineLog = Logger(subsystem: "NamRig", category: "engine")
 #if os(macOS)
 import CoreAudio
 #endif
@@ -260,7 +263,7 @@ final class AudioEngine {
     var reverbEnabled = false { didSet { P.reverb.bypass.store(!reverbEnabled, ordering: .relaxed) } }
     var reverbDecayPct: Double = 70 { didSet { updateReverb(); paramDidChange?(.reverbDecay, paramNormalized(.reverbDecay)) } }
     var reverbDampPct: Double = 30 { didSet { updateReverb() } }
-    var reverbMixPct: Double = 25 { didSet { updateReverb(); paramDidChange?(.reverbMix, paramNormalized(.reverbMix)) } }
+    var reverbMixPct: Double = 25 { didSet { engineLog.debug("reverbMix \(self.reverbMixPct)"); updateReverb(); paramDidChange?(.reverbMix, paramNormalized(.reverbMix)) } }
 
     var irReverbEnabled = false { didSet { P.irReverb.bypass.store(!irReverbEnabled, ordering: .relaxed) } }
     var irReverbMixPct: Double = 35 { didSet { P.irReverb.mix = Float(irReverbMixPct / 100) } }
@@ -344,6 +347,7 @@ final class AudioEngine {
     /// model reloads when the objects already hold that model — cheap enough to do per MIDI message).
     func setFocus(_ id: RigPathID) {
         guard id != focusRaw else { return }
+        engineLog.debug("setFocus \(id.rawValue)")
         P.state = capturePath()
         focusRaw = id
         applyPath(P.state, force: false)
@@ -357,6 +361,7 @@ final class AudioEngine {
     func focusInstance(_ iid: UUID, in id: RigPathID) {
         setFocus(id)
         guard let inst = P.state.instance(iid), P.focused[inst.kind] != iid else { return }
+        engineLog.debug("focusInstance \(inst.kind.rawValue)")
         P.state = capturePath()
         P.focused[inst.kind] = iid
         applyParams(inst.p, kind: inst.kind, force: false)
@@ -868,6 +873,7 @@ final class AudioEngine {
     /// Push one kind's params into the flat props (→ the focused instance's DSP object). `force`
     /// reloads models / IRs even if already loaded (preset load = fresh state).
     private func applyParams(_ p: BlockParams, kind: BlockKind, force: Bool) {
+        engineLog.debug("applyParams \(kind.rawValue) force=\(force)")
         let feedback = paramDidChange; paramDidChange = nil
         defer { paramDidChange = feedback }
         switch kind {
@@ -902,6 +908,7 @@ final class AudioEngine {
     /// Install a PathState into the FOCUSED path: objects synced to the instance list, then every
     /// focused instance's params pushed into the flat props.
     private func applyPath(_ st: PathState, force: Bool) {
+        engineLog.debug("applyPath \(self.focusRaw.rawValue) force=\(force) blocks=\(st.blocks.count)")
         P.state = st
         P.sync()
         for k in BlockKind.allCases { if let inst = P.focusedInstance(k) { applyParams(inst.p, kind: k, force: force) } }

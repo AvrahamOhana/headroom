@@ -252,7 +252,7 @@ struct ChainStripView: View {
     private func update(_ g: DragGesture.Value, _ inst: BlockInstance, _ id: RigPathID) {
                 if let d = drag, d.inst.id != inst.id { drag = nil }        // stale state from an aborted gesture
                 if drag == nil {
-                    dragLog.notice("lift \(inst.kind.rawValue)")
+                    dragLog.debug("lift \(inst.kind.rawValue)")
                     let center = frames.tiles[inst.id].map { CGPoint(x: $0.midX, y: $0.midY) } ?? g.startLocation
                     var d = Drag(inst: inst, from: id, location: g.location,
                                  grabOffset: CGSize(width: g.startLocation.x - center.x, height: g.startLocation.y - center.y))
@@ -296,7 +296,7 @@ struct ChainStripView: View {
     private func commitDrag() {
         guard let d = drag else { return }
         let t0 = CFAbsoluteTimeGetCurrent()
-        defer { dragLog.notice("commitDrag total \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms") }
+        defer { dragLog.debug("commitDrag total \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms") }
         drag = nil
         guard let t = d.target else { return }
         let others = audio.instances(of: t.path).filter { $0.id != d.inst.id }
@@ -307,7 +307,7 @@ struct ChainStripView: View {
         }
         let t1 = CFAbsoluteTimeGetCurrent()
         audio.moveInstance(d.inst.id, from: d.from, to: t.path, before: before)
-        dragLog.notice("moveInstance \(Int((CFAbsoluteTimeGetCurrent() - t1) * 1000)) ms")
+        dragLog.debug("moveInstance \(Int((CFAbsoluteTimeGetCurrent() - t1) * 1000)) ms")
         if selectedID == d.inst.id { audio.focusInstance(d.inst.id, in: t.path) }
         Haptics.impact(.light)
     }

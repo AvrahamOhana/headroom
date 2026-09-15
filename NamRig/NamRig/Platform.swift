@@ -45,9 +45,12 @@ enum IdleTimer {
     }
 }
 
+/// Decoded artwork cache — tiles redraw often; decoding a JPEG per redraw is wasteful.
+@MainActor private var artworkCache: [String: Image] = [:]
 extension Image {
-    /// Load an image file from disk (model artwork sidecars). nil if unreadable.
-    init?(file path: String) {
+    /// Load an image file from disk (model artwork sidecars), cached by path. nil if unreadable.
+    @MainActor init?(file path: String) {
+        if let cached = artworkCache[path] { self = cached; return }
         #if os(iOS)
         guard let ui = UIImage(contentsOfFile: path) else { return nil }
         self.init(uiImage: ui)
@@ -55,6 +58,7 @@ extension Image {
         guard let ns = NSImage(contentsOfFile: path) else { return nil }
         self.init(nsImage: ns)
         #endif
+        artworkCache[path] = self
     }
 }
 
