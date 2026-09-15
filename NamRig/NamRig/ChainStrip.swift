@@ -136,6 +136,10 @@ struct ChainStripView: View {
                 addTile(id)
             }
             .padding(.vertical, 2)
+            .background(alignment: .leading) {   // the cable
+                Capsule().fill(LinearGradient(colors: [.white.opacity(0.28), .white.opacity(0.10)], startPoint: .leading, endPoint: .trailing))
+                    .frame(height: 3).padding(.leading, 30).padding(.trailing, 60)
+            }
             .animation(.snappy(duration: 0.22), value: order.map(\.id))
         }
         .background(GeometryReader { g in Color.clear.preference(key: RowFramesKey.self, value: [id: g.frame(in: .named(space))]) })
@@ -160,15 +164,46 @@ struct ChainStripView: View {
 
     // MARK: tiles
 
-    private func tileFace(_ block: ChainBlock, suffix: String?, on: Bool, selected sel: Bool) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: block.icon).font(.system(size: 20, weight: .semibold))
-            Text(suffix.map { "\(block.short) \($0)" } ?? block.short).font(.system(size: 10, weight: .heavy))
+    /// A stompbox: colored chassis with a top bevel, status LED, icon, name, and a glance readout.
+    private func tileFace(_ block: ChainBlock, suffix: String?, on: Bool, selected sel: Bool, readout: String = "", art: Image? = nil) -> some View {
+        let body = on ? block.color : Color(white: 0.28)
+        return VStack(spacing: 3) {
+            HStack {
+                LED(on: on, color: on ? .green : .red, size: 7)
+                Spacer()
+                Text(suffix ?? "").font(.system(size: 8, weight: .heavy)).foregroundStyle(.white.opacity(0.7))
+            }
+            .padding(.horizontal, 6).padding(.top, 5)
+            ZStack {
+                if let art {
+                    art.resizable().scaledToFill().frame(width: 30, height: 22).clipShape(RoundedRectangle(cornerRadius: 4))
+                        .opacity(on ? 1 : 0.4)
+                } else {
+                    Image(systemName: block.icon).font(.system(size: 19, weight: .semibold))
+                }
+            }
+            .frame(height: 24)
+            Text(block.short).font(.system(size: 9.5, weight: .heavy)).tracking(0.5)
+            Text(readout).font(.system(size: 7.5, weight: .semibold, design: .rounded)).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: tileW - 8)
+                .foregroundStyle(on ? Stage.displayInk : .white.opacity(0.45))
+                .padding(.bottom, 4)
         }
         .frame(width: tileW, height: tileH)
-        .foregroundStyle(on ? .white : .white.opacity(0.3))
-        .background(on ? block.color.gradient : Color.gray.opacity(0.22).gradient, in: RoundedRectangle(cornerRadius: 12))
+        .foregroundStyle(on ? .white : .white.opacity(0.45))
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12).fill(LinearGradient(colors: [body.opacity(0.95), body.opacity(0.7)], startPoint: .top, endPoint: .bottom))
+                RoundedRectangle(cornerRadius: 12).strokeBorder(LinearGradient(colors: [.white.opacity(0.45), .white.opacity(0.05)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 12).strokeBorder(.black.opacity(0.35), lineWidth: 1).padding(-1)
+            }
+            .shadow(color: .black.opacity(on ? 0.45 : 0.25), radius: 5, y: 3)
+        }
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(sel ? .white : .clear, lineWidth: 2))
+        .overlay(alignment: .bottom) {   // stomp switch cap
+            Circle().fill(LinearGradient(colors: [.white.opacity(0.35), .black.opacity(0.4)], startPoint: .top, endPoint: .bottom))
+                .frame(width: 6, height: 6).offset(y: -1.5).opacity(0)
+        }
     }
 
     /// `dragged`: this is the lifted tile → draw its slot as the gap. `parked`: the lifted tile is
@@ -176,7 +211,8 @@ struct ChainStripView: View {
     /// gesture) stays alive.
     private func tile(_ inst: BlockInstance, _ block: ChainBlock, in id: RigPathID, dragged: Bool = false, parked: Bool = false) -> some View {
         let on = audio.isEnabled(inst.id, in: id), sel = selectedID == inst.id
-        return tileFace(block, suffix: audio.label(for: inst.id, in: id), on: on, selected: sel)
+        let art = inst.kind == .amp ? audio.artwork(for: inst.id, in: id).flatMap { Image(file: $0) } : nil
+        return tileFace(block, suffix: audio.label(for: inst.id, in: id), on: on, selected: sel, readout: audio.readout(for: inst.id, in: id), art: art)
             .opacity(dragged ? 0 : 1)
             .overlay { if dragged && !parked { gap } }
             .frame(width: parked ? 0 : tileW)
@@ -269,7 +305,7 @@ struct ChainStripView: View {
 
     @ViewBuilder private var liftedTile: some View {
         if let d = drag, d.lifted, let cb = ChainBlock(d.inst.kind) {
-            tileFace(cb, suffix: nil, on: audio.isEnabled(d.inst.id, in: d.from), selected: false)
+            tileFace(cb, suffix: nil, on: audio.isEnabled(d.inst.id, in: d.from), selected: false, readout: audio.readout(for: d.inst.id, in: d.from))
                 .scaleEffect(1.08)
                 .shadow(color: .black.opacity(0.35), radius: 10, y: 6)
                 .opacity(d.target == nil ? 0.5 : 1)
@@ -310,7 +346,8 @@ struct ChainStripView: View {
             }
             .frame(width: tileW, height: tileH)
             .foregroundStyle(.white)
-            .background(active ? Color.green.gradient : Color.green.opacity(0.45).gradient, in: RoundedRectangle(cornerRadius: 12))
+            .background(unitChassis(active ? .green : Color(red: 0.15, green: 0.45, blue: 0.25)))
+            .overlay(alignment: .topLeading) { LED(on: active, color: .red, size: 7).padding(6) }
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(looperSelected ? .white : .clear, lineWidth: 2))
         }
         .buttonStyle(.plain)
@@ -324,14 +361,29 @@ struct ChainStripView: View {
             }
             .frame(width: tileW, height: tileH)
             .foregroundStyle(.white)
-            .background(LinearGradient(colors: [.cyan, .blue], startPoint: .top, endPoint: .bottom), in: RoundedRectangle(cornerRadius: 12))
+            .background(unitChassis(Color(red: 0.15, green: 0.5, blue: 0.75)))
+            .overlay(alignment: .topLeading) { LED(on: audio.state == .running && !audio.muted, color: .green, size: 7).padding(6) }
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(outputSelected ? .white : .clear, lineWidth: 2))
         }
         .buttonStyle(.plain)
     }
 
+    /// Jack + label at the row ends.
     private func endLabel(_ t: String) -> some View {
-        Text(t).font(.caption2.bold()).foregroundStyle(.secondary).frame(width: 26, height: tileH)
+        VStack(spacing: 3) {
+            Circle().fill(LinearGradient(colors: [.white.opacity(0.5), .black.opacity(0.4)], startPoint: .top, endPoint: .bottom))
+                .overlay(Circle().fill(.black.opacity(0.7)).frame(width: 5, height: 5))
+                .frame(width: 12, height: 12)
+            Text(t).font(.system(size: 9, weight: .heavy, design: .rounded)).foregroundStyle(.secondary)
+        }
+        .frame(width: 26, height: tileH)
     }
-    private var connector: some View { Rectangle().fill(.secondary.opacity(0.4)).frame(width: connectorW, height: 2) }
+    private var connector: some View { Rectangle().fill(.clear).frame(width: connectorW, height: 2) }
+    private func unitChassis(_ c: Color) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12).fill(LinearGradient(colors: [c.opacity(0.95), c.opacity(0.7)], startPoint: .top, endPoint: .bottom))
+            RoundedRectangle(cornerRadius: 12).strokeBorder(LinearGradient(colors: [.white.opacity(0.45), .white.opacity(0.05)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.4), radius: 5, y: 3)
+    }
 }

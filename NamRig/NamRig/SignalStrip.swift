@@ -1,6 +1,6 @@
 //
 //  SignalStrip.swift
-//  NamRig — shared compact IN/OUT meters + CPU readout, used in both the main screen and Live mode.
+//  NamRig — shared compact IN/OUT LED meters + CPU readout, used in both the main screen and Live mode.
 //
 
 import SwiftUI
@@ -15,7 +15,7 @@ struct SignalStrip: View {
                 meter("IN", audio.inPeakDb)
                 meter("OUT", audio.outPeakDb)
                 HStack(spacing: 4) {
-                    Circle().fill(cpu > 80 ? Color.red : (cpu > 50 ? Color.orange : Color.green)).frame(width: 7, height: 7)
+                    LED(on: true, color: cpu > 80 ? .red : (cpu > 50 ? .orange : .green), size: 7)
                     Text("\(cpu)%").font(.system(size: 13, weight: .bold, design: .rounded)).monospacedDigit()
                         .foregroundStyle(cpu > 80 ? .red : .gray)
                 }
@@ -24,14 +24,9 @@ struct SignalStrip: View {
     }
 
     private func meter(_ label: String, _ db: Float) -> some View {
-        let norm = max(0, min(1, (Double(db) + 60) / 60))
-        return HStack(spacing: 5) {
+        HStack(spacing: 5) {
             Text(label).font(.system(size: 10, weight: .heavy, design: .rounded)).foregroundStyle(.gray).fixedSize()
-            ZStack(alignment: .leading) {
-                Capsule().fill(.gray.opacity(0.22))
-                Rectangle().fill(db > -1 ? Color.red : Color.green).scaleEffect(x: CGFloat(norm), anchor: .leading)
-            }
-            .frame(width: 58, height: 6).clipShape(Capsule())
+            LEDMeter(db: db, segments: 12, height: 6).frame(width: 60)
         }
     }
 }

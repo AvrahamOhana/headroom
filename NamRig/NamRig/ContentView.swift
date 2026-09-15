@@ -102,6 +102,7 @@ struct ContentView: View {
             .padding(.horizontal, 18)
             .padding(.bottom, 24)
         }
+        .background(StageBackground())
         .onAppear { audio.applyCurrentPreset(); audio.start(); midi.start(engine: audio) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { if audio.state == .stopped { audio.start() } }
@@ -141,7 +142,10 @@ struct ContentView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Text("NamRig").font(.title2.bold())
+            HStack(spacing: 6) {
+                LED(on: isRunning, color: .green, size: 9)
+                Text("NamRig").font(.system(size: 20, weight: .black, design: .rounded)).tracking(0.5)
+            }
             Spacer()
             Button { showLive = true } label: {
                 Label("Live", systemImage: "tv").font(.subheadline.bold())
@@ -181,17 +185,22 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Button { audio.prevPreset() } label: { Image(systemName: "chevron.left.circle.fill").font(.title) }.buttonStyle(.plain)
             Spacer()
-            VStack(spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(audio.presetTag)
-                        .font(.system(size: 19, weight: .black, design: .rounded)).monospacedDigit().foregroundStyle(.white)
-                        .padding(.horizontal, 9).padding(.vertical, 2)
-                        .background(sceneColor(audio.sceneInBank), in: RoundedRectangle(cornerRadius: 7))
-                    Text(audio.currentPresetName)
-                        .font(.system(size: 27, weight: .heavy, design: .rounded)).lineLimit(1).minimumScaleFactor(0.5)
+            DisplayPanel(padding: 8) {
+                VStack(spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(audio.presetTag)
+                            .font(.system(size: 17, weight: .black, design: .rounded)).monospacedDigit().foregroundStyle(.white)
+                            .padding(.horizontal, 8).padding(.vertical, 1)
+                            .background(sceneColor(audio.sceneInBank), in: RoundedRectangle(cornerRadius: 6))
+                        Text(audio.currentPresetName)
+                            .font(.system(size: 26, weight: .heavy, design: .rounded)).lineLimit(1).minimumScaleFactor(0.5)
+                            .foregroundStyle(Stage.displayInk)
+                            .shadow(color: Stage.displayInk.opacity(0.6), radius: 6)
+                    }
+                    Text("PRESET \(audio.currentPresetIndex + 1)/\(audio.presets.count)")
+                        .font(.system(size: 9, weight: .bold, design: .rounded)).tracking(1).foregroundStyle(Stage.displayInk.opacity(0.6))
                 }
-                Text("PRESET \(audio.currentPresetIndex + 1)/\(audio.presets.count)")
-                    .font(.caption2).foregroundStyle(.secondary)
+                .frame(minWidth: 180)
             }
             Spacer()
             Button { audio.nextPreset() } label: { Image(systemName: "chevron.right.circle.fill").font(.title) }.buttonStyle(.plain)
@@ -207,7 +216,7 @@ struct ContentView: View {
             } label: { Image(systemName: "list.bullet").font(.title3) }
         }
         .padding(.vertical, 10).padding(.horizontal, 14)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
+        .chassis(.gray.opacity(0.5), rail: 3)
     }
 
     // MARK: - Chain strip (ChainStrip.swift)
@@ -226,7 +235,7 @@ struct ContentView: View {
                         .padding(.horizontal, 6).padding(.vertical, 2).background(Color.cyan, in: Capsule())
                 }
                 Image(systemName: block.icon).foregroundStyle(isOn(block) ? block.color : .secondary)
-                Text(audio.label(for: iid, in: path).map { "\(block.full) \($0)" } ?? block.full).font(.headline)
+                Nameplate(text: audio.label(for: iid, in: path).map { "\(block.full) \($0)" } ?? block.full)
                 Spacer()
                 if audio.dualOn && audio.availableToAdd(in: path.other).contains(block.kind) {
                     Button { let to = path.other; audio.moveInstance(iid, from: path, to: to, before: nil); audio.focusInstance(iid, in: to) } label: {
@@ -235,13 +244,12 @@ struct ContentView: View {
                 }
                 Button { audio.removeInstance(iid, in: path); selectedID = nil } label: { Image(systemName: "trash").font(.subheadline) }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
-                Toggle("", isOn: enabled(block)).labelsHidden().tint(.green)
+                FootswitchToggle(isOn: enabled(block), color: .green)
             }
             controls(block)
         }
-        .padding().frame(maxWidth: .infinity)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(block.color.opacity(0.5), lineWidth: 1.5))
+        .padding().padding(.top, 4).frame(maxWidth: .infinity)
+        .chassis(block.color)
     }
 
     @ViewBuilder private func controls(_ b: ChainBlock) -> some View {
@@ -503,7 +511,7 @@ struct ContentView: View {
         VStack(spacing: 12) {
             HStack {
                 Image(systemName: "slider.horizontal.3").foregroundStyle(.cyan)
-                Text("Output / Mixer").font(.headline)
+                Nameplate(text: "Output / Mixer")
                 Spacer()
                 Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(.tertiary)
             }
@@ -547,16 +555,15 @@ struct ContentView: View {
             Divider().overlay(.secondary.opacity(0.2))
             midiOutSection
         }
-        .padding().frame(maxWidth: .infinity)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.secondary.opacity(0.25)))
+        .padding().padding(.top, 4).frame(maxWidth: .infinity)
+        .chassis(Color(red: 0.15, green: 0.5, blue: 0.75))
     }
 
     private var looperPanel: some View {
         VStack(spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "repeat.circle.fill").foregroundStyle(.green)
-                Text("Looper").font(.headline)
+                Nameplate(text: "Looper")
                 Spacer()
                 Text(audio.looperStateLabel).font(.caption.bold().monospacedDigit()).foregroundStyle(.secondary)
             }
@@ -571,9 +578,8 @@ struct ContentView: View {
             Text("Records the full rig (after both paths). One button: Record → Play → Overdub. Map a footswitch in MIDI.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
-        .padding().frame(maxWidth: .infinity)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.green.opacity(0.5), lineWidth: 1.5))
+        .padding().padding(.top, 4).frame(maxWidth: .infinity)
+        .chassis(.green)
     }
 
     private var looperButtonText: String {
@@ -925,20 +931,13 @@ struct ContentView: View {
     }
 
     private func meter(_ label: String, _ db: Float) -> some View {
-        let norm = max(0, min(1, (Double(db) + 60) / 60))
-        return VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(label).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Text(db <= -120 ? "—" : String(format: "%.0f dB", db)).font(.caption).monospacedDigit()
             }
-            ZStack(alignment: .leading) {
-                Capsule().fill(.black.opacity(0.25))
-                Rectangle().fill(db > -1 ? Color.red : Color.green)
-                    .scaleEffect(x: CGFloat(norm), anchor: .leading)   // transform, not layout — no GeometryReader thrash
-            }
-            .frame(height: 8)
-            .clipShape(Capsule())
+            LEDMeter(db: db, segments: 18, height: 8)
         }
     }
 

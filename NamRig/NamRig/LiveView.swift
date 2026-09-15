@@ -13,7 +13,7 @@ struct LiveView: View {
 
     var body: some View {
         ZStack {
-            Color.platformBackground.ignoresSafeArea()
+            StageBackground()
             VStack(spacing: 0) {
                 topRow
                 Spacer(minLength: 8)

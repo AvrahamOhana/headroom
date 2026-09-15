@@ -377,6 +377,36 @@ final class AudioEngine {
         guard same.count > 1, let n = same.firstIndex(where: { $0.id == iid }) else { return nil }
         return "\(n + 1)"
     }
+    /// Artwork sidecar for an amp instance's capture (tile thumbnail).
+    func artwork(for iid: UUID, in id: RigPathID) -> String? {
+        guard let inst = path(id).state.instance(iid), inst.kind == .amp else { return nil }
+        let mid = (id == focusRaw && P.focused[.amp] == iid) ? selectedModelID : inst.p.model
+        return models.first { $0.id == mid }?.artworkPath
+    }
+    /// One-line glance value for a tile ("350 ms", "4:1", the capture name…).
+    func readout(for iid: UUID, in id: RigPathID) -> String {
+        guard let inst = path(id).state.instance(iid) else { return "" }
+        let p = (id == focusRaw && P.focused[inst.kind] == iid) ? captureAll() : inst.p
+        func name(_ mid: String) -> String { models.first { $0.id == mid }?.name ?? (mid.isEmpty ? "—" : mid) }
+        switch inst.kind {
+        case .amp: return name(p.model)
+        case .pedal: return p.pedalModel.isEmpty ? "—" : name(p.pedalModel)
+        case .cab: return p.cabIR.isEmpty ? "no IR" : (p.cabIR as NSString).deletingPathExtension
+        case .irReverb: return p.irReverbIR.isEmpty ? "no IR" : (p.irReverbIR as NSString).deletingPathExtension
+        case .gate: return "\(Int(p.gateThr)) dB"
+        case .comp: return String(format: "%.0f:1", p.compRatio)
+        case .boost: return String(format: "+%.0f dB", p.boostDb)
+        case .drive: return ["Soft", "Hard", "Fuzz"][max(0, min(2, p.driveMode))] + " ×\(Int(p.driveAmt))"
+        case .stomp: return P.circuitDrive.modelName(p.stompModel)
+        case .wah: return p.wahAuto ? "Auto" : "\(Int(p.wahPos * 100))%"
+        case .eq: return String(format: "%+.0f %+.0f %+.0f", p.bass, p.mid, p.treble)
+        case .chorus: return String(format: "%.1f Hz", p.chorusRate)
+        case .flanger: return String(format: "%.1f Hz", p.flangerRate)
+        case .tremolo: return String(format: "%.1f Hz", p.tremoloRate)
+        case .delay: return p.delaySync ? p.delayDiv.displayName : "\(Int(p.delayTime)) ms"
+        case .reverb: return ["Room", "Plate", "Spring", "Hall"][max(0, min(3, p.reverbType))]
+        }
+    }
     func isEnabled(_ iid: UUID, in id: RigPathID) -> Bool {
         guard let inst = path(id).state.instance(iid) else { return false }
         if id == focusRaw && P.focused[inst.kind] == iid { return isBlockEnabled(inst.kind) }

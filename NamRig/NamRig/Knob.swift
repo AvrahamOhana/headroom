@@ -26,21 +26,31 @@ struct Knob: View {
     var body: some View {
         VStack(spacing: 4) {
             ZStack {
+                // Tick skirt (11 marks over the 270° sweep).
+                ForEach(0..<11, id: \.self) { i in
+                    Capsule().fill(Color.primary.opacity(i % 5 == 0 ? 0.35 : 0.18))
+                        .frame(width: 1.5, height: i % 5 == 0 ? size * 0.09 : size * 0.05)
+                        .offset(y: -size * 0.5)
+                        .rotationEffect(.degrees(-135 + Double(i) * 27))
+                }
                 Circle().trim(from: 0, to: 0.75)
                     .stroke(Color.primary.opacity(0.12), style: StrokeStyle(lineWidth: size * 0.09, lineCap: .round))
                     .rotationEffect(.degrees(135))
                 Circle().trim(from: CGFloat(min(norm, centerNorm) * 0.75), to: CGFloat(max(norm, centerNorm) * 0.75))
                     .stroke(color.gradient, style: StrokeStyle(lineWidth: size * 0.09, lineCap: .round))
                     .rotationEffect(.degrees(135))
-                Circle().fill(.background.shadow(.inner(color: .black.opacity(0.35), radius: 3)))
-                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.08)))
-                    .padding(size * 0.15)
+                // Cap: metallic gradient with a rim highlight and a drop shadow.
+                Circle().fill(LinearGradient(colors: [Color(white: 0.34), Color(white: 0.12)], startPoint: .top, endPoint: .bottom))
+                    .overlay(Circle().strokeBorder(LinearGradient(colors: [.white.opacity(0.5), .white.opacity(0.05)], startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.5), radius: 3, y: 2)
+                    .padding(size * 0.16)
                 Capsule().fill(color)
-                    .frame(width: size * 0.06, height: size * 0.2)
-                    .offset(y: -size * 0.24)
+                    .shadow(color: color.opacity(0.8), radius: 2)
+                    .frame(width: size * 0.07, height: size * 0.22)
+                    .offset(y: -size * 0.22)
                     .rotationEffect(.degrees(-135 + norm * 270))
             }
-            .frame(width: size, height: size)
+            .frame(width: size + 6, height: size + 6)
             .contentShape(Circle())
             .gesture(drag)
             .onTapGesture(count: 2) { if let d = defaultValue { set(d); tick() } }
