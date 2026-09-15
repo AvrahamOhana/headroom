@@ -11,6 +11,9 @@
 //
 
 import SwiftUI
+import os
+
+private let dragLog = Logger(subsystem: "NamRig", category: "drag")
 
 private struct TileFramesKey: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
@@ -83,13 +86,28 @@ struct ChainStripView: View {
 
     // MARK: rows
 
-    /// The order a row DISPLAYS while dragging: the dragged tile is pulled out and a gap (nil) opened at the target.
-    private func displayOrder(_ id: RigPathID) -> [BlockInstance?] {
-        var items: [BlockInstance?] = audio.instances(of: id)
-        guard let d = drag, d.lifted else { return items }
-        items.removeAll { $0?.id == d.inst.id }
-        if let t = d.target, t.path == id { items.insert(nil, at: min(t.index, items.count)) }
-        return items
+    /// A row slot: an instance, or the cross-row placeholder gap.
+    private enum Slot: Identifiable {
+        case inst(BlockInstance), gap
+        var id: String { switch self { case .inst(let b): return b.id.uuidString; case .gap: return "gap" } }
+    }
+
+    /// What a row DISPLAYS while dragging. The dragged tile's VIEW must survive the whole gesture
+    /// (it owns the DragGesture — removing it orphans the gesture and `onEnded` never fires), so:
+    /// same-row target → the dragged instance is moved to its proposed slot and drawn as the gap;
+    /// other-row target → it stays in its row collapsed to zero width, and the target row shows a
+    /// separate `.gap` placeholder.
+    private func displayOrder(_ id: RigPathID) -> [Slot] {
+        var items = audio.instances(of: id)
+        guard let d = drag, d.lifted else { return items.map { .inst($0) } }
+        if let t = d.target, t.path == id, d.from == id {
+            items.removeAll { $0.id == d.inst.id }
+            items.insert(d.inst, at: min(t.index, items.count))
+            return items.map { .inst($0) }
+        }
+        var slots: [Slot] = items.map { .inst($0) }
+        if let t = d.target, t.path == id { slots.insert(.gap, at: min(t.index, slots.count)) }
+        return slots
     }
 
     private func pathRow(_ id: RigPathID) -> some View {
@@ -97,22 +115,28 @@ struct ChainStripView: View {
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: spacing) {
                 endLabel(audio.dualOn ? id.label : "IN")
-                ForEach(order, id: \.?.id) { item in
-                    connector
-                    if let inst = item, let cb = ChainBlock(inst.kind) {
-                        tile(inst, cb, in: id)
-                            .background(GeometryReader { g in
-                                Color.clear.preference(key: TileFramesKey.self, value: [inst.id: g.frame(in: .named(space))])
-                            })
-                    } else {
+                ForEach(order) { slot in
+                    switch slot {
+                    case .gap:
+                        connector
                         gap
+                    case .inst(let inst):
+                        if let cb = ChainBlock(inst.kind) {
+                            let dragged = drag?.lifted == true && drag?.inst.id == inst.id
+                            let parked = dragged && drag?.target?.path != id          // targeting the other row
+                            if !parked { connector }
+                            tile(inst, cb, in: id, dragged: dragged, parked: parked)
+                                .background(GeometryReader { g in
+                                    Color.clear.preference(key: TileFramesKey.self, value: [inst.id: g.frame(in: .named(space))])
+                                })
+                        }
                     }
                 }
                 connector
                 addTile(id)
             }
             .padding(.vertical, 2)
-            .animation(.snappy(duration: 0.22), value: order.map { $0?.id })
+            .animation(.snappy(duration: 0.22), value: order.map(\.id))
         }
         .background(GeometryReader { g in Color.clear.preference(key: RowFramesKey.self, value: [id: g.frame(in: .named(space))]) })
         .overlay(alignment: .leading) {
@@ -132,7 +156,6 @@ struct ChainStripView: View {
             .strokeBorder(Color.cyan.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4]))
             .background(Color.cyan.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
             .frame(width: tileW, height: tileH)
-            .transition(.scale.combined(with: .opacity))
     }
 
     // MARK: tiles
@@ -148,16 +171,22 @@ struct ChainStripView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(sel ? .white : .clear, lineWidth: 2))
     }
 
-    private func tile(_ inst: BlockInstance, _ block: ChainBlock, in id: RigPathID) -> some View {
+    /// `dragged`: this is the lifted tile → draw its slot as the gap. `parked`: the lifted tile is
+    /// targeting the OTHER row → collapse it so this row closes up. Either way the view (and its
+    /// gesture) stays alive.
+    private func tile(_ inst: BlockInstance, _ block: ChainBlock, in id: RigPathID, dragged: Bool = false, parked: Bool = false) -> some View {
         let on = audio.isEnabled(inst.id, in: id), sel = selectedID == inst.id
         return tileFace(block, suffix: audio.label(for: inst.id, in: id), on: on, selected: sel)
+            .opacity(dragged ? 0 : 1)
+            .overlay { if dragged && !parked { gap } }
+            .frame(width: parked ? 0 : tileW)
+            .clipped()
             .contentShape(RoundedRectangle(cornerRadius: 12))
             .onTapGesture {
                 audio.focusInstance(inst.id, in: id)
                 selectedID = sel ? nil : inst.id; outputSelected = false; looperSelected = false
             }
             .gesture(dragGesture(inst, in: id))
-            .transition(.scale(scale: 0.9).combined(with: .opacity))
     }
 
     /// macOS: a mouse drag starts immediately (it doesn't fight trackpad scrolling). iOS: a short,
@@ -176,7 +205,9 @@ struct ChainStripView: View {
     }
 
     private func update(_ g: DragGesture.Value, _ inst: BlockInstance, _ id: RigPathID) {
+                if let d = drag, d.inst.id != inst.id { drag = nil }        // stale state from an aborted gesture
                 if drag == nil {
+                    dragLog.notice("lift \(inst.kind.rawValue)")
                     let center = frames.tiles[inst.id].map { CGPoint(x: $0.midX, y: $0.midY) } ?? g.startLocation
                     var d = Drag(inst: inst, from: id, location: g.location,
                                  grabOffset: CGSize(width: g.startLocation.x - center.x, height: g.startLocation.y - center.y))
@@ -192,7 +223,7 @@ struct ChainStripView: View {
                     Haptics.impact(.medium)
                 }
                 drag?.location = g.location
-                if drag?.lifted == false { withAnimation(.snappy(duration: 0.15)) { drag?.lifted = true } }
+                if drag?.lifted == false { drag?.lifted = true }
                 retarget(g.location)
     }
 
@@ -213,13 +244,15 @@ struct ChainStripView: View {
         let new = (path: row, index: idx)
         if d.target?.path != new.path || d.target?.index != new.index {
             if d.target != nil { Haptics.impact(.light) }
-            withAnimation(.snappy(duration: 0.2)) { drag?.target = new }
+            drag?.target = new
         }
     }
 
     private func commitDrag() {
         guard let d = drag else { return }
-        withAnimation(.snappy(duration: 0.22)) { drag = nil }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer { dragLog.notice("commitDrag total \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms") }
+        drag = nil
         guard let t = d.target else { return }
         let others = audio.instances(of: t.path).filter { $0.id != d.inst.id }
         let before = t.index < others.count ? others[t.index].id : nil
@@ -227,7 +260,9 @@ struct ChainStripView: View {
             var proposed = others.map(\.id); proposed.insert(d.inst.id, at: min(t.index, others.count))
             if proposed == audio.instances(of: d.from).map(\.id) { return }
         }
+        let t1 = CFAbsoluteTimeGetCurrent()
         audio.moveInstance(d.inst.id, from: d.from, to: t.path, before: before)
+        dragLog.notice("moveInstance \(Int((CFAbsoluteTimeGetCurrent() - t1) * 1000)) ms")
         if selectedID == d.inst.id { audio.focusInstance(d.inst.id, in: t.path) }
         Haptics.impact(.light)
     }
