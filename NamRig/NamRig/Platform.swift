@@ -74,7 +74,9 @@ extension View {
         #if os(iOS)
         presentationDetents(detents)
         #else
-        frame(minWidth: mac.width, minHeight: mac.height)
+        // Never taller/wider than the visible screen (menu bar + Dock excluded), or the bottom is unreachable.
+        let vis = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1280, height: 800)
+        frame(width: min(mac.width, vis.width - 80), height: min(mac.height, vis.height - 120))
         #endif
     }
     @ViewBuilder func inlineTitle() -> some View {
