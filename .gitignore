@@ -25,3 +25,5 @@ Carthage/Build/
 # Misc
 *.log
 keys.md
+# Claude Code local permissions (machine-specific; may contain tokens)
+.claude/settings.local.json
