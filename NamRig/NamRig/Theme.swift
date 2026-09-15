@@ -10,7 +10,9 @@ enum Stage {
     static let bgTop = Color(red: 0.11, green: 0.115, blue: 0.13)
     static let bgBottom = Color(red: 0.05, green: 0.05, blue: 0.06)
     static let panel = Color(red: 0.16, green: 0.165, blue: 0.185)
-    static let panelLight = Color(red: 0.93, green: 0.93, blue: 0.95)
+    static let panelLight = Color(red: 0.97, green: 0.97, blue: 0.98)
+    static let panelLightBottom = Color(red: 0.86, green: 0.86, blue: 0.88)
+    static let floorLight = Color(red: 0.80, green: 0.80, blue: 0.82)
     static let display = Color(red: 0.04, green: 0.05, blue: 0.05)
     static let displayInk = Color(red: 0.55, green: 1.0, blue: 0.75)
 }
@@ -24,8 +26,8 @@ struct StageBackground: View {
                 LinearGradient(colors: [Stage.bgTop, Stage.bgBottom], startPoint: .top, endPoint: .bottom)
                 RadialGradient(colors: [.white.opacity(0.06), .clear], center: .top, startRadius: 0, endRadius: 520)
             } else {
-                Color(red: 0.90, green: 0.90, blue: 0.91)
-                RadialGradient(colors: [.white.opacity(0.7), .clear], center: .top, startRadius: 0, endRadius: 520)
+                LinearGradient(colors: [Stage.floorLight, Color(red: 0.72, green: 0.72, blue: 0.75)], startPoint: .top, endPoint: .bottom)
+                RadialGradient(colors: [.white.opacity(0.45), .clear], center: .top, startRadius: 0, endRadius: 520)
             }
         }
         .ignoresSafeArea()
@@ -42,10 +44,13 @@ struct Chassis: ViewModifier {
             .background {
                 ZStack(alignment: .top) {
                     RoundedRectangle(cornerRadius: 14)
-                        .fill(scheme == .dark ? Stage.panel.gradient : Stage.panelLight.gradient)
-                        .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.18), radius: 10, y: 6)
+                        .fill(scheme == .dark ? AnyShapeStyle(Stage.panel.gradient)
+                                              : AnyShapeStyle(LinearGradient(colors: [Stage.panelLight, Stage.panelLightBottom], startPoint: .top, endPoint: .bottom)))
+                        .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.28), radius: 10, y: 6)
                     RoundedRectangle(cornerRadius: 14)
-                        .strokeBorder(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.16 : 0.9), .white.opacity(0.02)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+                        .strokeBorder(scheme == .dark
+                                      ? AnyShapeStyle(LinearGradient(colors: [.white.opacity(0.16), .white.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+                                      : AnyShapeStyle(Color.black.opacity(0.18)), lineWidth: 1)
                     UnevenRoundedRectangle(topLeadingRadius: 14, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 14)
                         .fill(accent.gradient).frame(height: rail)
                 }
@@ -76,6 +81,7 @@ struct LEDMeter: View {
     var db: Float                 // dBFS
     var segments = 14
     var height: CGFloat = 8
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
         let lit = Int((max(0, min(1, (Double(db) + 60) / 60)) * Double(segments)).rounded())
         HStack(spacing: 1.5) {
@@ -83,11 +89,13 @@ struct LEDMeter: View {
                 let frac = Double(i) / Double(segments)
                 let c: Color = frac > 0.9 ? .red : (frac > 0.72 ? .yellow : .green)
                 RoundedRectangle(cornerRadius: 1.5)
-                    .fill(i < lit ? c : c.opacity(0.14))
+                    .fill(i < lit ? c : c.opacity(scheme == .dark ? 0.14 : 0.3))
                     .shadow(color: i < lit ? c.opacity(0.6) : .clear, radius: 2)
             }
         }
-        .frame(height: height)
+        .padding(2)
+        .background(Color.black.opacity(scheme == .dark ? 0.35 : 0.55), in: RoundedRectangle(cornerRadius: 3))
+        .frame(height: height + 4)
     }
 }
 
@@ -113,9 +121,9 @@ struct Nameplate: View {
     var body: some View {
         Text(text.uppercased())
             .font(.system(size: 11, weight: .heavy, design: .rounded)).tracking(1.2)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.primary.opacity(0.75))
             .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Color.black.opacity(0.18), in: Capsule())
+            .background(Color.black.opacity(0.12), in: Capsule())
             .overlay(Capsule().strokeBorder(.white.opacity(0.08)))
     }
 }

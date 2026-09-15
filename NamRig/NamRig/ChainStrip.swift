@@ -43,6 +43,7 @@ struct ChainStripView: View {
     private final class FrameStore { var tiles: [UUID: CGRect] = [:]; var rows: [RigPathID: CGRect] = [:] }
     @State private var drag: Drag? = nil
     @State private var frames = FrameStore()
+    @Environment(\.colorScheme) private var scheme
     private let tileW: CGFloat = 58, tileH: CGFloat = 74
     private let spacing: CGFloat = 4, connectorW: CGFloat = 6
     private var pitch: CGFloat { tileW + connectorW + 2 * spacing }
@@ -66,17 +67,25 @@ struct ChainStripView: View {
                     Label("List", systemImage: "list.bullet").font(.caption.bold())
                 }.buttonStyle(.plain).foregroundStyle(.secondary)
             }
-            pathRow(.a)
-            if audio.dualOn { pathRow(.b) }
-            HStack(spacing: 4) {
-                endLabel(audio.dualOn ? "A+B" : "")
-                connector
-                looperTile
-                connector
-                outputTile
-                Spacer()
+            VStack(alignment: .leading, spacing: 6) {
+                pathRow(.a)
+                if audio.dualOn { pathRow(.b) }
+                HStack(spacing: 4) {
+                    endLabel(audio.dualOn ? "A+B" : "")
+                    connector
+                    looperTile
+                    connector
+                    outputTile
+                    Spacer()
+                }
+                .padding(.vertical, 2)
             }
-            .padding(.vertical, 2)
+            .padding(.vertical, 8).padding(.horizontal, 6)
+            .background {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(scheme == .dark ? Color.black.opacity(0.28) : Color.black.opacity(0.10))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(scheme == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.12)))
+            }
         }
         .coordinateSpace(name: space)
         .onPreferenceChange(TileFramesKey.self) { [frames] v in frames.tiles = v }
@@ -137,7 +146,7 @@ struct ChainStripView: View {
             }
             .padding(.vertical, 2)
             .background(alignment: .leading) {   // the cable
-                Capsule().fill(LinearGradient(colors: [.white.opacity(0.28), .white.opacity(0.10)], startPoint: .leading, endPoint: .trailing))
+                Capsule().fill(scheme == .dark ? Color.white.opacity(0.22) : Color.black.opacity(0.35))
                     .frame(height: 3).padding(.leading, 30).padding(.trailing, 60)
             }
             .animation(.snappy(duration: 0.22), value: order.map(\.id))
