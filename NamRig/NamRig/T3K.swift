@@ -417,6 +417,13 @@ struct T3KBrowser: View {
             .overlay { if !loading && tones.isEmpty { ContentUnavailableView("No captures", systemImage: "magnifyingglass", description: Text(status.isEmpty ? "Try another search or filter." : status)) } }
             .searchable(text: $query, prompt: "Search captures, makes, creators")
             .onSubmit(of: .search) { tab = .search; Task { await search() } }
+            // Live search: re-query 0.4 s after the last keystroke (Return isn't reliable on every platform).
+            .task(id: query) {
+                guard !query.isEmpty || tab == .search else { return }
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+                if tab != .search { tab = .search } else { await search() }
+            }
             .refreshable { await search() }
         }
     }
