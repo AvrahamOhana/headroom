@@ -2,8 +2,8 @@
 
 **Headroom** (formerly NamRig) is a native **iOS + macOS guitar rig**: Neural Amp Modeler captures as the amp core, a free-form
 dual-path signal chain you build by dragging blocks, real reverb/delay/modulation algorithms,
-MIDI in/out, and a built-in TONE3000 browser for captures and cab IRs. One-time purchase, no
-subscription — and open source under the GPLv3.
+MIDI in/out, and a built-in TONE3000 browser for captures and cab IRs. Free on the App Store, no
+subscription, no ads — and open source under the GPLv3.
 
 <!-- screenshot -->
 

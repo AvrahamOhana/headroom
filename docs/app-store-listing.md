@@ -9,7 +9,7 @@ Headroom
 Amp & FX for real captures
 
 ## Promotional text (170) — editable without a new build
-Your amps, captured. Load Neural Amp Modeler captures, build a two-path rig by dragging blocks, and play with no subscription.
+Your amps, captured. Load Neural Amp Modeler captures, build a two-path rig by dragging blocks, and play. Free and open source.
 
 ## Description (4000)
 Headroom turns your iPhone or iPad into a professional guitar rig built around Neural Amp Modeler — the same capture technology behind today's flagship modelers, with thousands of free amp and pedal captures available from the community.
@@ -48,8 +48,8 @@ MADE FOR THE STAGE
 • Bluetooth MIDI pedals pair right inside the app
 • Low-latency engine with a latency/stability picker
 
-NO SUBSCRIPTION
-One purchase. No accounts required (TONE3000 login is optional), no ads, no tracking, and the source code is open under the GPL.
+FREE AND OPEN SOURCE
+Completely free: no purchase, no subscription, no in-app purchases, no ads, no tracking, and no account required (TONE3000 login is optional). The source code is open under the GPL.
 
 Requires an audio interface with an instrument input (iRig, Scarlett, or similar). Headroom is not affiliated with Neural Amp Modeler, TONE3000, or any amplifier or pedal manufacturer.
 
@@ -67,6 +67,9 @@ https://github.com/AvrahamOhana/nam-rig/blob/main/docs/privacy.md
 
 ## Category
 Primary: Music · Secondary: Utilities
+
+## Pricing
+Free (no in-app purchases). Availability: all countries.
 
 ## Age rating
 4+ (no objectionable content)

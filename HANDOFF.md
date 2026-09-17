@@ -12,7 +12,7 @@
 > and Swift module keep the working title `NamRig`; the `namrig://` URL scheme stays (it is the TONE3000 OAuth redirect).
 
 A **native iOS guitar amp-sim / multi-FX** app aimed at competing with Line 6 Helix,
-Fractal Axe-FX and Neural Quad Cortex — but **one-time purchase, no subscription**.
+Fractal Axe-FX and Neural Quad Cortex — released **free** on the App Store (open source, GPLv3).
 
 **Stack**
 - **SwiftUI** UI, `@MainActor @Observable` `AudioEngine` (Swift 6, `-default-isolation=MainActor`).
