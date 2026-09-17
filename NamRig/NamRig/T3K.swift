@@ -352,6 +352,7 @@ struct T3KBrowser: View {
                             if let u = client.profile?.username { Text("@\(u)") }
                             Button("Log out", role: .destructive) { client.logout() }
                         } label: { Image(systemName: "person.crop.circle") }
+                        .plainMenu()
                     }
                 }
             }
@@ -468,6 +469,7 @@ struct T3KBrowser: View {
                 .font(.subheadline).padding(.horizontal, 12).padding(.vertical, 6)
                 .background(.quaternary, in: Capsule())
         }
+        .plainMenu()
     }
 
     private func toggleFavorite(_ tone: T3KTone) {

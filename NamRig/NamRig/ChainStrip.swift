@@ -331,6 +331,7 @@ struct ChainStripView: View {
                     Button {
                         if let nid = audio.addBlock(kind, in: id) { selectedID = nid; outputSelected = false; looperSelected = false }
                     } label: { Label(cb.full, systemImage: cb.icon) }
+        .plainMenu()
                 }
             }
         } label: {

@@ -206,6 +206,7 @@ struct ContentView: View {
             Button { audio.nextPreset() } label: { Image(systemName: "chevron.right.circle.fill").font(.title) }.buttonStyle(.plain)
             Menu {
                 Button { showPresets = true } label: { Label("Setlist / Manage…", systemImage: "music.note.list") }
+            .plainMenu()
                 Divider()
                 Button { showSave = true } label: { Label("Save as new…", systemImage: "plus") }
                 Button { audio.overwriteCurrent() } label: { Label("Overwrite current", systemImage: "square.and.arrow.down") }
@@ -323,6 +324,7 @@ struct ContentView: View {
                     Button { audio.selectedModelID = m.id } label: {
                         Label(m.name, systemImage: m.id == audio.selectedModelID ? "checkmark" : (m.bundled ? "shippingbox" : "tray.and.arrow.down"))
                     }
+            .plainMenu()
                 }
                 Divider()
                 Button { showImporter = true } label: { Label("Import .nam…", systemImage: "square.and.arrow.down") }
@@ -356,6 +358,7 @@ struct ContentView: View {
             }
             Menu {
                 Button { audio.selectedPedalModelID = nil } label: { Label("None (empty)", systemImage: audio.selectedPedalModelID == nil ? "checkmark" : "nosign") }
+            .plainMenu()
                 ForEach(audio.pedalModels) { m in
                     Button { audio.selectedPedalModelID = m.id } label: {
                         Label(m.name, systemImage: m.id == audio.selectedPedalModelID ? "checkmark" : "tray.and.arrow.down")
@@ -721,6 +724,7 @@ struct ContentView: View {
                         Menu("Parameter / expression") { ForEach(MIDIParam.allCases) { p in Button(p.label) { midi.addMapping(.param(p)) } } }
                         Menu("Block on/off") { ForEach(BlockKind.allCases, id: \.self) { k in Button(k.rawValue) { midi.addMapping(.blockToggle(k.rawValue)) } } }
                     } label: { Label("Add mapping", systemImage: "plus") }
+                    .plainMenu()
                 }
             }
             .navigationTitle("MIDI")
@@ -753,6 +757,7 @@ struct ContentView: View {
                     Button("Program Change") { var l = audio.currentMidiOut; l.append(MIDIOutMessage(kind: .programChange, channel: midi.outChannel)); audio.currentMidiOut = l }
                     Button("Control Change") { var l = audio.currentMidiOut; l.append(MIDIOutMessage(kind: .controlChange, channel: midi.outChannel, number: 1, value: 127)); audio.currentMidiOut = l }
                 } label: { Image(systemName: "plus.circle.fill").font(.title3) }
+                .plainMenu()
             }
             if audio.currentMidiOut.isEmpty {
                 Text("Messages sent to external pedals/amps when this preset loads.").font(.caption2).foregroundStyle(.secondary)

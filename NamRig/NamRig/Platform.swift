@@ -105,6 +105,15 @@ extension View {
         self
         #endif
     }
+    /// A Menu whose custom label IS the button — no system pull-down chrome behind it (macOS draws
+    /// its own pill + chevron around Menu labels otherwise).
+    func plainMenu() -> some View {
+        #if os(macOS)
+        menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        #else
+        menuIndicator(.hidden)
+        #endif
+    }
     @ViewBuilder func hideStatusBar() -> some View {
         #if os(iOS)
         statusBarHidden(true)
