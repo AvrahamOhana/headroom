@@ -130,7 +130,7 @@ struct PlainMenu<Content: View, Label: View>: View {
                         .buttonStyle(MenuItemStyle())
                         .padding(6)
                 }
-                .frame(minWidth: 220, maxHeight: 420)
+                .frame(minWidth: 240, maxHeight: 640)
                 .simultaneousGesture(TapGesture().onEnded { open = false })
             }
         #else

@@ -323,14 +323,29 @@ struct ChainStripView: View {
         }
     }
 
+    private static let addGroups: [(String, [BlockKind])] = [
+        ("Dynamics", [.gate, .comp]),
+        ("Gain", [.boost, .drive, .stomp, .wah, .pedal]),
+        ("Amp & Cab", [.amp, .cab]),
+        ("Tone & Modulation", [.eq, .chorus, .flanger, .tremolo]),
+        ("Time & Space", [.delay, .reverb, .irReverb]),
+    ]
+
     private func addTile(_ id: RigPathID) -> some View {
-        let avail = audio.availableToAdd(in: id)
+        let avail = Set(audio.availableToAdd(in: id))
         return PlainMenu {
-            ForEach(avail, id: \.self) { kind in
-                if let cb = ChainBlock(kind) {
-                    Button {
-                        if let nid = audio.addBlock(kind, in: id) { selectedID = nid; outputSelected = false; looperSelected = false }
-                    } label: { Label(cb.full, systemImage: cb.icon) }
+            ForEach(Self.addGroups, id: \.0) { group in
+                let kinds = group.1.filter { avail.contains($0) }
+                if !kinds.isEmpty {
+                    Section(group.0) {
+                        ForEach(kinds, id: \.self) { kind in
+                            if let cb = ChainBlock(kind) {
+                                Button {
+                                    if let nid = audio.addBlock(kind, in: id) { selectedID = nid; outputSelected = false; looperSelected = false }
+                                } label: { Label(cb.full, systemImage: cb.icon) }
+                            }
+                        }
+                    }
                 }
             }
         } label: {
