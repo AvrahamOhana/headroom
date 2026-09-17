@@ -9,7 +9,7 @@
 #   * Launch with --terminate-existing or a running app gives "prevent launch" (RBS error 7).
 set -e
 DEV=${DEV:?set DEV=<device id> (find yours with: xcrun devicectl list devices)}
-BID=${BID:-com.avrahamohana.Headroom}
+BID=${BID:-com.avrahamohana.headroomapp}
 EXCL="$1"
 cd "$(dirname "$0")/.."
 echo "=== BUILD ${EXCL:+(excluding: $EXCL)} ==="

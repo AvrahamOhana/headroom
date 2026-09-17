@@ -284,7 +284,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.avrahamohana.Headroom;
+				PRODUCT_BUNDLE_IDENTIFIER = com.avrahamohana.headroomapp;
 				PRODUCT_NAME = Headroom;
 				PRODUCT_MODULE_NAME = NamRig;
 				INFOPLIST_KEY_CFBundleDisplayName = Headroom;
@@ -343,7 +343,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.avrahamohana.Headroom;
+				PRODUCT_BUNDLE_IDENTIFIER = com.avrahamohana.headroomapp;
 				PRODUCT_NAME = Headroom;
 				PRODUCT_MODULE_NAME = NamRig;
 				INFOPLIST_KEY_CFBundleDisplayName = Headroom;

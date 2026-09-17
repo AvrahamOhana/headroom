@@ -8,7 +8,7 @@
 
 ## 1. What Headroom is
 
-> Shipped name: **Headroom** (bundle id `com.avrahamohana.Headroom`, product `Headroom.app`). The Xcode project, source folder
+> Shipped name: **Headroom** (bundle id `com.avrahamohana.headroomapp`, product `Headroom.app`). The Xcode project, source folder
 > and Swift module keep the working title `NamRig`; the `namrig://` URL scheme stays (it is the TONE3000 OAuth redirect).
 
 A **native iOS guitar amp-sim / multi-FX** app aimed at competing with Line 6 Helix,

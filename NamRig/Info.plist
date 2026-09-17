@@ -10,7 +10,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>com.avrahamohana.Headroom.oauth</string>
+			<string>com.avrahamohana.headroomapp.oauth</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>namrig</string>
