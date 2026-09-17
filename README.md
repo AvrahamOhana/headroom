@@ -32,7 +32,7 @@ subscription, no ads — and open source under the GPLv3.
 Requirements: Xcode 26, iOS 18+ or macOS 15+ (the `Atomic` type sets the floor).
 
 ```
-git clone --recurse-submodules https://github.com/AvrahamOhana/nam-rig.git
+git clone --recurse-submodules https://github.com/AvrahamOhana/headroom.git
 open NamRig/NamRig.xcodeproj
 ```
 

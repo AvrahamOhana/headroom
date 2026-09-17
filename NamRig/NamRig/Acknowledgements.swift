@@ -58,7 +58,7 @@ struct AcknowledgementsView: View {
     var body: some View {
         List {
             Section {
-                Text("Headroom is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License v3 (or later). Source code: github.com/AvrahamOhana/nam-rig. The bundled \"Bugera V5\" capture is the author's own, licensed CC BY 4.0.")
+                Text("Headroom is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License v3 (or later). Source code: github.com/AvrahamOhana/headroom. The bundled \"Bugera V5\" capture is the author's own, licensed CC BY 4.0.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if let u = URL(string: "https://www.gnu.org/licenses/gpl-3.0.html") {
                     Link(destination: u) { Label("GNU GPL v3", systemImage: "link").font(.caption) }

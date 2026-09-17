@@ -34,4 +34,4 @@ If this policy changes, the new version will be published at the same address wi
 
 ## Contact
 
-Questions: open an issue at https://github.com/AvrahamOhana/nam-rig/issues or email amiko617@gmail.com.
+Questions: open an issue at https://github.com/AvrahamOhana/headroom/issues or email amiko617@gmail.com.

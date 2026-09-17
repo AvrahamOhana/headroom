@@ -57,13 +57,13 @@ Requires an audio interface with an instrument input (iRig, Scarlett, or similar
 guitar,amp,amplifier,effects,pedal,nam,neural,capture,tone,modeler,cab,ir,midi,looper,rig
 
 ## Support URL
-https://github.com/AvrahamOhana/nam-rig/issues
+https://github.com/AvrahamOhana/headroom/issues
 
 ## Marketing URL (optional)
-https://github.com/AvrahamOhana/nam-rig
+https://github.com/AvrahamOhana/headroom
 
 ## Privacy Policy URL
-https://github.com/AvrahamOhana/nam-rig/blob/main/docs/privacy.md
+https://github.com/AvrahamOhana/headroom/blob/main/docs/privacy.md
 
 ## Category
 Primary: Music · Secondary: Utilities
