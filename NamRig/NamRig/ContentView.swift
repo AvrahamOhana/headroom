@@ -83,7 +83,12 @@ struct ContentView: View {
     @State private var renameText = ""
     @State private var mutedBeforeTuner = false
     @State private var midi = MIDIManager()
+    @State private var showSplash = true
     private var isRunning: Bool { audio.state == .running }
+    private func dismissSplash() {
+        guard showSplash else { return }
+        withAnimation(.easeOut(duration: 0.6).delay(0.3)) { showSplash = false }
+    }
 
     var body: some View {
         ScrollView {
@@ -103,6 +108,13 @@ struct ContentView: View {
             .padding(.bottom, 24)
         }
         .background(StageBackground())
+        .overlay {
+            if showSplash {
+                SplashView().transition(.opacity)
+            }
+        }
+        .onChange(of: audio.state) { _, s in if s == .running { dismissSplash() } }
+        .task { try? await Task.sleep(for: .seconds(2.5)); dismissSplash() }   // never block the UI on a missing interface
         .onAppear { audio.applyCurrentPreset(); audio.start(); midi.start(engine: audio) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { if audio.state == .stopped { audio.start() } }
