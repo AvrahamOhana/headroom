@@ -10,7 +10,7 @@ import Observation
 import Synchronization
 import os
 
-let engineLog = Logger(subsystem: "NamRig", category: "engine")
+let engineLog = Logger(subsystem: "Headroom", category: "engine")
 #if os(macOS)
 import CoreAudio
 #endif
@@ -951,7 +951,7 @@ final class AudioEngine {
 
     private func requestMicThenStart() async {
         let granted = await AVAudioApplication.requestRecordPermission()
-        guard granted else { lastError = "Microphone access denied. Enable it in Settings → NamRig."; return }
+        guard granted else { lastError = "Microphone access denied. Enable it in Settings → Headroom."; return }
         do {
             try configureSession()
             try startEngine()

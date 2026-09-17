@@ -218,7 +218,7 @@ nonisolated final class ClockCounter: @unchecked Sendable {
         let notify: MIDINotifyBlock = { [weak self] msg in
             if msg.pointee.messageID == .msgSetupChanged { Task { @MainActor in self?.connectAllSources() } }
         }
-        MIDIClientCreateWithBlock("NamRig" as CFString, &client, notify)
+        MIDIClientCreateWithBlock("Headroom" as CFString, &client, notify)
         let clock = self.clock
         let recv: MIDIReceiveBlock = { [weak self] listPtr, _ in
             guard let self else { return }
@@ -251,9 +251,9 @@ nonisolated final class ClockCounter: @unchecked Sendable {
                 packet = MIDIEventPacketNext(&packet).pointee
             }
         }
-        MIDIInputPortCreateWithProtocol(client, "NamRig In" as CFString, ._1_0, &inPort, recv)
-        MIDIOutputPortCreate(client, "NamRig Out Port" as CFString, &outPort)
-        MIDISourceCreateWithProtocol(client, "NamRig Out" as CFString, ._1_0, &virtualOut)
+        MIDIInputPortCreateWithProtocol(client, "Headroom In" as CFString, ._1_0, &inPort, recv)
+        MIDIOutputPortCreate(client, "Headroom Out Port" as CFString, &outPort)
+        MIDISourceCreateWithProtocol(client, "Headroom Out" as CFString, ._1_0, &virtualOut)
         connectAllSources()
         updateClockTimer()
     }

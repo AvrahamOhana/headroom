@@ -1,6 +1,6 @@
-# NamRig
+# Headroom
 
-A native **iOS + macOS guitar rig**: Neural Amp Modeler captures as the amp core, a free-form
+**Headroom** (formerly NamRig) is a native **iOS + macOS guitar rig**: Neural Amp Modeler captures as the amp core, a free-form
 dual-path signal chain you build by dragging blocks, real reverb/delay/modulation algorithms,
 MIDI in/out, and a built-in TONE3000 browser for captures and cab IRs. One-time purchase, no
 subscription — and open source under the GPLv3.
@@ -62,14 +62,14 @@ network is ~40× slower unoptimized and the audio thread starves.
 - `tools/render.sh <model.nam> <in.wav> <out.wav>` — renders audio through the real NAM core + blocks
   offline and prints peak / noise floor / click metrics.
 
-`HANDOFF.md` is the developer guide: architecture, gotchas, and the roadmap.
+The Xcode project, source folder and Swift module keep the working title `NamRig`. `HANDOFF.md` is the developer guide: architecture, gotchas, and the roadmap.
 
 ## Captures
 
-NamRig ships one capture, the author's own amp (CC BY 4.0). Bring your own `.nam` files, or log in to
+Headroom ships one capture, the author's own amp (CC BY 4.0). Bring your own `.nam` files, or log in to
 TONE3000 inside the app. Never redistribute captures you downloaded — they belong to their creators.
 
 ## License
 
 GPL-3.0-or-later — see `LICENSE`. Third-party notices and the capture license are in `NOTICE.md`.
-NamRig is not affiliated with Neural Amp Modeler, TONE3000, or any amplifier or pedal manufacturer.
+Headroom is not affiliated with Neural Amp Modeler, TONE3000, or any amplifier or pedal manufacturer.

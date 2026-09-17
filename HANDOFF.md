@@ -1,4 +1,4 @@
-# NamRig — Handoff / Continuation Guide
+# Headroom (working title NamRig) — Handoff / Continuation Guide
 
 > Written 2026-07-01 to move development to a new MacBook and let a fresh Claude Code
 > session pick up seamlessly. This file is the portable version of the local `~/.claude`
@@ -6,7 +6,10 @@
 
 ---
 
-## 1. What NamRig is
+## 1. What Headroom is
+
+> Shipped name: **Headroom** (bundle id `com.avrahamohana.Headroom`, product `Headroom.app`). The Xcode project, source folder
+> and Swift module keep the working title `NamRig`; the `namrig://` URL scheme stays (it is the TONE3000 OAuth redirect).
 
 A **native iOS guitar amp-sim / multi-FX** app aimed at competing with Line 6 Helix,
 Fractal Axe-FX and Neural Quad Cortex — but **one-time purchase, no subscription**.

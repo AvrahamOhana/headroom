@@ -1,6 +1,6 @@
 # Notices
 
-NamRig is © 2026 Avraham Ohana and is released under the **GNU General Public License v3.0**
+Headroom (formerly NamRig) is © 2026 Avraham Ohana and is released under the **GNU General Public License v3.0**
 (see `LICENSE`). If you distribute a modified version, you must publish its source under the same
 license. The copyright holder may additionally distribute NamRig under other terms (for example on
 the App Store).
@@ -21,13 +21,13 @@ Settings → Legal → Acknowledgements.
 ## Bundled capture
 
 `NamRig/NamRig/Models/Bugera V5.nam` is a Neural Amp Modeler capture of the author's own amplifier,
-made by the author. It is licensed under **CC BY 4.0** — use it freely, credit "Avraham Ohana / NamRig".
+made by the author. It is licensed under **CC BY 4.0** — use it freely, credit "Avraham Ohana / Headroom".
 No other captures are bundled. Captures downloaded through TONE3000 belong to their creators and are
 subject to TONE3000's terms; they must not be redistributed with the app.
 
 ## Trademarks
 
-TONE3000 is a trademark of its owner; NamRig uses the TONE3000 API with the user's own account and is
+TONE3000 is a trademark of its owner; Headroom uses the TONE3000 API with the user's own account and is
 not affiliated with or endorsed by TONE3000. Amplifier and pedal names that appear in captures or in
 the stompbox model descriptions are the property of their respective owners and are used only to
-describe the circuits and sounds being modeled; NamRig is not affiliated with any of them.
+describe the circuits and sounds being modeled; Headroom is not affiliated with any of them.

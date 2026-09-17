@@ -144,7 +144,7 @@ struct ContentView: View {
         HStack(spacing: 12) {
             HStack(spacing: 6) {
                 LED(on: isRunning, color: .green, size: 9)
-                Text("NamRig").font(.system(size: 20, weight: .black, design: .rounded)).tracking(0.5)
+                Text("Headroom").font(.system(size: 20, weight: .black, design: .rounded)).tracking(0.5)
             }
             Spacer()
             Button { showLive = true } label: {
@@ -674,7 +674,7 @@ struct ContentView: View {
                 }
                 Section("Output") {
                     if midi.destinations.isEmpty {
-                        Text("No hardware outputs. \"NamRig Out\" virtual port is always available to other apps.").font(.caption).foregroundStyle(.secondary)
+                        Text("No hardware outputs. \"Headroom Out\" virtual port is always available to other apps.").font(.caption).foregroundStyle(.secondary)
                     } else {
                         ForEach(midi.destinations, id: \.self) { Label($0, systemImage: "arrow.up.right.circle") }
                     }

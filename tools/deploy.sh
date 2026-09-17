@@ -1,5 +1,5 @@
 #!/bin/zsh
-# NamRig build + install + launch to a paired iPhone.
+# Headroom build + install + launch to a paired iPhone.
 # Usage: tools/deploy.sh ["ExcludedFile.swift ..."]   (optional EXCLUDED_SOURCE_FILE_NAMES)
 #
 # Gotchas baked in (learned the hard way — see HANDOFF.md):
@@ -9,7 +9,7 @@
 #   * Launch with --terminate-existing or a running app gives "prevent launch" (RBS error 7).
 set -e
 DEV=${DEV:?set DEV=<device id> (find yours with: xcrun devicectl list devices)}
-BID=${BID:-com.avrahamohana.NamRig}
+BID=${BID:-com.avrahamohana.Headroom}
 EXCL="$1"
 cd "$(dirname "$0")/.."
 echo "=== BUILD ${EXCL:+(excluding: $EXCL)} ==="
@@ -17,9 +17,9 @@ xcodebuild build -project NamRig/NamRig.xcodeproj -scheme NamRig \
   -destination "id=$DEV" -allowProvisioningUpdates -quiet \
   ${EXCL:+EXCLUDED_SOURCE_FILE_NAMES="$EXCL"} 2>&1 | tail -15
 APP=""
-for cand in $(find ~/Library/Developer/Xcode/DerivedData -type d -name "NamRig.app" \
+for cand in $(find ~/Library/Developer/Xcode/DerivedData -type d -name "Headroom.app" \
   -path "*Build/Products/Debug-iphoneos*" -not -path "*Index.noindex*" -not -path "*.XCInstall*"); do
-  [ -f "$cand/NamRig" ] && APP="$cand" && break
+  [ -f "$cand/Headroom" ] && APP="$cand" && break
 done
 echo "=== APP: $APP ==="
 echo "=== INSTALL ==="

@@ -13,7 +13,7 @@
 import SwiftUI
 import os
 
-private let dragLog = Logger(subsystem: "NamRig", category: "drag")
+private let dragLog = Logger(subsystem: "Headroom", category: "drag")
 
 private struct TileFramesKey: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
