@@ -204,9 +204,8 @@ struct ContentView: View {
             }
             Spacer()
             Button { audio.nextPreset() } label: { Image(systemName: "chevron.right.circle.fill").font(.title) }.buttonStyle(.plain)
-            Menu {
+            PlainMenu {
                 Button { showPresets = true } label: { Label("Setlist / Manage…", systemImage: "music.note.list") }
-            .plainMenu()
                 Divider()
                 Button { showSave = true } label: { Label("Save as new…", systemImage: "plus") }
                 Button { audio.overwriteCurrent() } label: { Label("Overwrite current", systemImage: "square.and.arrow.down") }
@@ -258,7 +257,7 @@ struct ContentView: View {
         switch b {
         case .gate:
             KnobGrid {
-                Knob(label: "Threshold", value: $audio.gateThresholdDb, range: -70 ... -10, unit: "dB", color: c, defaultValue: -40)
+                Knob(label: "Threshold", value: $audio.gateThresholdDb, range: -80 ... -10, unit: "dB", color: c, defaultValue: -60)
                 Knob(label: "Release", value: $audio.gateReleaseMs, range: 10...500, unit: "ms", color: c, defaultValue: 80)
                 Knob(label: "Range", value: $audio.gateRangeDb, range: -90 ... -10, unit: "dB", color: c, defaultValue: -80)
             }
@@ -319,12 +318,11 @@ struct ContentView: View {
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.12)))
                     .allowsHitTesting(false)   // decorative — never intercept the enable toggle
             }
-            Menu {
+            PlainMenu {
                 ForEach(audio.ampModels) { m in
                     Button { audio.selectedModelID = m.id } label: {
                         Label(m.name, systemImage: m.id == audio.selectedModelID ? "checkmark" : (m.bundled ? "shippingbox" : "tray.and.arrow.down"))
                     }
-            .plainMenu()
                 }
                 Divider()
                 Button { showImporter = true } label: { Label("Import .nam…", systemImage: "square.and.arrow.down") }
@@ -356,9 +354,8 @@ struct ContentView: View {
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.12)))
                     .allowsHitTesting(false)
             }
-            Menu {
+            PlainMenu {
                 Button { audio.selectedPedalModelID = nil } label: { Label("None (empty)", systemImage: audio.selectedPedalModelID == nil ? "checkmark" : "nosign") }
-            .plainMenu()
                 ForEach(audio.pedalModels) { m in
                     Button { audio.selectedPedalModelID = m.id } label: {
                         Label(m.name, systemImage: m.id == audio.selectedPedalModelID ? "checkmark" : "tray.and.arrow.down")
@@ -713,7 +710,7 @@ struct ContentView: View {
                         .padding(.vertical, 2)
                     }
                     .onDelete { idx in idx.map { midi.mappings[$0].id }.forEach { midi.removeMapping($0) } }
-                    Menu {
+                    PlainMenu {
                         Button("Next preset") { midi.addMapping(.presetNext) }
                         Button("Previous preset") { midi.addMapping(.presetPrev) }
                         Button("Looper REC / Play / Dub") { midi.addMapping(.looper) }
@@ -724,7 +721,6 @@ struct ContentView: View {
                         Menu("Parameter / expression") { ForEach(MIDIParam.allCases) { p in Button(p.label) { midi.addMapping(.param(p)) } } }
                         Menu("Block on/off") { ForEach(BlockKind.allCases, id: \.self) { k in Button(k.rawValue) { midi.addMapping(.blockToggle(k.rawValue)) } } }
                     } label: { Label("Add mapping", systemImage: "plus") }
-                    .plainMenu()
                 }
             }
             .navigationTitle("MIDI")
@@ -753,11 +749,10 @@ struct ContentView: View {
                 Image(systemName: "arrow.up.right.circle.fill").foregroundStyle(.orange)
                 Text("MIDI Out (this preset)").font(.subheadline.bold())
                 Spacer()
-                Menu {
+                PlainMenu {
                     Button("Program Change") { var l = audio.currentMidiOut; l.append(MIDIOutMessage(kind: .programChange, channel: midi.outChannel)); audio.currentMidiOut = l }
                     Button("Control Change") { var l = audio.currentMidiOut; l.append(MIDIOutMessage(kind: .controlChange, channel: midi.outChannel, number: 1, value: 127)); audio.currentMidiOut = l }
                 } label: { Image(systemName: "plus.circle.fill").font(.title3) }
-                .plainMenu()
             }
             if audio.currentMidiOut.isEmpty {
                 Text("Messages sent to external pedals/amps when this preset loads.").font(.caption2).foregroundStyle(.secondary)

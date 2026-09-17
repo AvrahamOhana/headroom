@@ -202,7 +202,7 @@ final class AudioEngine {
     var gateEnabled = true {
         didSet { P.gate.bypass.store(!gateEnabled, ordering: .relaxed) }
     }
-    var gateThresholdDb: Double = -34 { didSet { P.gate.thresholdDb = Float(gateThresholdDb); paramDidChange?(.gateThr, paramNormalized(.gateThr)) } }
+    var gateThresholdDb: Double = -60 { didSet { P.gate.thresholdDb = Float(gateThresholdDb); paramDidChange?(.gateThr, paramNormalized(.gateThr)) } }
     var gateReleaseMs: Double = 80 { didSet { P.gate.releaseMs = Float(gateReleaseMs) } }
     var gateRangeDb: Double = -80 { didSet { P.gate.rangeDb = Float(gateRangeDb) } }
 

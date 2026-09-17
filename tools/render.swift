@@ -92,7 +92,7 @@ nonisolated func stats(_ x: [Float], sr: Double) -> (peak: Float, rms: Float, fl
         print("  loudness meta: \(model.loudness.isFinite ? String(format: "%.1f dB", model.loudness) : "none") · probe peak \(String(format: "%.3f", probePeak)) · level via \(how) → trim \(String(format: "%+.1f", makeupDb)) dB")
 
         let gate = GateBlock(); gate.prepare(sampleRate: sr, maxBlock: blk); gate.reset()
-        gate.thresholdDb = -34; gate.releaseMs = 80; gate.rangeDb = -80
+        gate.thresholdDb = -60; gate.releaseMs = 80; gate.rangeDb = -80
         gate.bypass.store(noGate, ordering: .relaxed)
         let amp = AmpBlock(); amp.prepare(sampleRate: sr, maxBlock: blk); amp.reset()
         amp.setModel(model); amp.inputGain = powf(10, driveDb / 20); amp.makeupGain = powf(10, Float(makeupDb) / 20)

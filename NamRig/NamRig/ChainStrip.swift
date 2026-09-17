@@ -325,13 +325,12 @@ struct ChainStripView: View {
 
     private func addTile(_ id: RigPathID) -> some View {
         let avail = audio.availableToAdd(in: id)
-        return Menu {
+        return PlainMenu {
             ForEach(avail, id: \.self) { kind in
                 if let cb = ChainBlock(kind) {
                     Button {
                         if let nid = audio.addBlock(kind, in: id) { selectedID = nid; outputSelected = false; looperSelected = false }
                     } label: { Label(cb.full, systemImage: cb.icon) }
-        .plainMenu()
                 }
             }
         } label: {

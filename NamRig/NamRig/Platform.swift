@@ -105,20 +105,48 @@ extension View {
         self
         #endif
     }
-    /// A Menu whose custom label IS the button — no system pull-down chrome behind it (macOS draws
-    /// its own pill + chevron around Menu labels otherwise).
-    func plainMenu() -> some View {
-        #if os(macOS)
-        menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-        #else
-        menuIndicator(.hidden)
-        #endif
-    }
     @ViewBuilder func hideStatusBar() -> some View {
         #if os(iOS)
         statusBarHidden(true)
         #else
         self
         #endif
+    }
+}
+
+/// A menu whose custom label IS the button. iOS: a native Menu. macOS: a plain button + popover list
+/// (macOS wraps Menu labels in its own pull-down chrome, which can't be turned off reliably).
+struct PlainMenu<Content: View, Label: View>: View {
+    @ViewBuilder var content: () -> Content
+    @ViewBuilder var label: () -> Label
+    @State private var open = false
+    var body: some View {
+        #if os(macOS)
+        Button { open.toggle() } label: { label() }
+            .buttonStyle(.plain)
+            .popover(isPresented: $open, arrowEdge: .bottom) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) { content() }
+                        .buttonStyle(MenuItemStyle())
+                        .padding(6)
+                }
+                .frame(minWidth: 220, maxHeight: 420)
+                .simultaneousGesture(TapGesture().onEnded { open = false })
+            }
+        #else
+        Menu { content() } label: { label() }.menuIndicator(.hidden)
+        #endif
+    }
+}
+
+/// Menu-row look for buttons inside a PlainMenu popover.
+struct MenuItemStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .labelStyle(.titleAndIcon)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(configuration.isPressed ? Color.accentColor.opacity(0.35) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
     }
 }

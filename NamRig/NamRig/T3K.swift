@@ -348,11 +348,10 @@ struct T3KBrowser: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 if client.isLoggedIn {
                     ToolbarItem(placement: .cancellationAction) {
-                        Menu {
+                        PlainMenu {
                             if let u = client.profile?.username { Text("@\(u)") }
                             Button("Log out", role: .destructive) { client.logout() }
                         } label: { Image(systemName: "person.crop.circle") }
-                        .plainMenu()
                     }
                 }
             }
@@ -462,14 +461,13 @@ struct T3KBrowser: View {
     }
 
     private func filterMenu(title: String, options: [(String, String)], action: @escaping (String, String) -> Void) -> some View {
-        Menu {
+        PlainMenu {
             ForEach(options, id: \.1) { opt in Button(opt.0) { action(opt.0, opt.1) } }
         } label: {
             HStack(spacing: 4) { Text(title); Image(systemName: "chevron.down").font(.caption2) }
                 .font(.subheadline).padding(.horizontal, 12).padding(.vertical, 6)
                 .background(.quaternary, in: Capsule())
         }
-        .plainMenu()
     }
 
     private func toggleFavorite(_ tone: T3KTone) {

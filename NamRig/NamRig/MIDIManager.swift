@@ -26,7 +26,7 @@ enum MIDIParam: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var range: ClosedRange<Double> {
         switch self {
-        case .ampDrive: return 0...24;        case .output: return -40...12;   case .gateThr: return -70...(-10)
+        case .ampDrive: return 0...24;        case .output: return -40...12;   case .gateThr: return -80...(-10)
         case .bass, .mid, .treble: return -12...12
         case .driveAmt: return 1...50;        case .driveLevel: return -24...6
         case .delayMix, .reverbMix, .reverbDecay, .chorusMix, .flangerMix, .tremoloDepth, .delayTone, .loopLevel: return 0...100

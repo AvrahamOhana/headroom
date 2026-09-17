@@ -22,7 +22,7 @@ enum RigPathID: String, Codable, CaseIterable, Identifiable, Sendable {
 struct BlockParams: Codable, Equatable {
     var model = ""
     var ampOn = true,    ampDrive = 0.0
-    var gateOn = true,   gateThr = -34.0, gateRel = 80.0, gateRange = -80.0
+    var gateOn = true,   gateThr = -60.0, gateRel = 80.0, gateRange = -80.0
     var compOn = true,   compThr = -18.0, compRatio = 4.0, compAtk = 10.0, compRel = 120.0, compMakeup = 0.0
     var driveOn = true,  driveAmt = 4.0,  driveTone = 4000.0, driveLevel = 0.0, driveMode = 0
     var eqOn = true,     bass = 0.0, mid = 0.0, treble = 0.0
