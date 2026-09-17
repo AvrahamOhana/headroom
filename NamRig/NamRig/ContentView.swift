@@ -145,6 +145,7 @@ struct ContentView: View {
             HStack(spacing: 6) {
                 LED(on: isRunning, color: .green, size: 9)
                 Text("Headroom").font(.system(size: 20, weight: .black, design: .rounded)).tracking(0.5)
+                    .lineLimit(1).minimumScaleFactor(0.6).fixedSize(horizontal: true, vertical: false)
             }
             Spacer()
             Button { showLive = true } label: {
