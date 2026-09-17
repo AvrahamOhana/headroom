@@ -1,86 +1,101 @@
 // make_icon.swift — run with:  swift tools/make_icon.swift   (macOS, no Xcode project needed)
-// Renders a 1024x1024 NamRig app icon to ./icon_1024.png (CoreGraphics + AppKit).
-// Opaque (noneSkipLast) → no alpha channel, App-Store-Connect safe. iOS applies the rounded mask itself.
+// Renders the 1024x1024 Headroom app icon to ./icon_1024.png: a VU meter whose needle sits high
+// in the green just below the red — "headroom". Opaque (noneSkipLast) → no alpha channel, App Store
+// Connect safe. iOS applies the rounded mask itself, so the composition keeps clear of the corners.
 import AppKit
 import CoreGraphics
 
 let S: CGFloat = 1024
 let cs = CGColorSpaceCreateDeviceRGB()
-guard let ctx = CGContext(data: nil, width: Int(S), height: Int(S),
-                          bitsPerComponent: 8, bytesPerRow: 0, space: cs,
-                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { fatalError("ctx") }
+guard let ctx = CGContext(data: nil, width: Int(S), height: Int(S), bitsPerComponent: 8, bytesPerRow: 0,
+                          space: cs, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { fatalError("ctx") }
+func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor { CGColor(colorSpace: cs, components: [r/255, g/255, b/255, a])! }
+let phosphor = rgb(140, 255, 190), phosphorDim = rgb(140, 255, 190, 0.35)
+let red = rgb(255, 70, 60)
 
-func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
-    CGColor(colorSpace: cs, components: [r/255, g/255, b/255, a])! }
-
-// 1. Background: diagonal charcoal gradient (matches dark app UI)
-let bg = CGGradient(colorsSpace: cs, colors: [rgb(22,23,28), rgb(12,13,16)] as CFArray, locations: [0, 1])!
-ctx.drawLinearGradient(bg, start: CGPoint(x: 0, y: S), end: CGPoint(x: S, y: 0), options: [])
-// red glow behind the amp
+// 1. Charcoal panel with a top light + faint brushed texture.
+let bg = CGGradient(colorsSpace: cs, colors: [rgb(38, 40, 46), rgb(14, 15, 18)] as CFArray, locations: [0, 1])!
+ctx.drawLinearGradient(bg, start: CGPoint(x: 0, y: S), end: CGPoint(x: 0, y: 0), options: [])
 ctx.saveGState()
-let glow = CGGradient(colorsSpace: cs, colors: [rgb(225,52,43,0.55), rgb(225,52,43,0)] as CFArray, locations: [0, 1])!
-ctx.drawRadialGradient(glow, startCenter: CGPoint(x: S*0.5, y: S*0.46), startRadius: 0,
-    endCenter: CGPoint(x: S*0.5, y: S*0.46), endRadius: S*0.55, options: [])
-ctx.restoreGState()
-
-// 2. Amp head silhouette
-let ampRect = CGRect(x: S*0.16, y: S*0.30, width: S*0.68, height: S*0.40)
-let ampPath = CGPath(roundedRect: ampRect, cornerWidth: 56, cornerHeight: 56, transform: nil)
-ctx.saveGState(); ctx.addPath(ampPath)
-let bezel = CGGradient(colorsSpace: cs, colors: [rgb(58,60,68), rgb(28,29,34)] as CFArray, locations: [0, 1])!
-ctx.clip(); ctx.drawLinearGradient(bezel, start: CGPoint(x: 0, y: ampRect.maxY), end: CGPoint(x: 0, y: ampRect.minY), options: [])
-ctx.restoreGState()
-
-let faceRect = ampRect.insetBy(dx: 30, dy: 30)
-let facePath = CGPath(roundedRect: faceRect, cornerWidth: 40, cornerHeight: 40, transform: nil)
-ctx.saveGState(); ctx.addPath(facePath); ctx.clip()
-let face = CGGradient(colorsSpace: cs, colors: [rgb(18,19,24), rgb(10,11,14)] as CFArray, locations: [0, 1])!
-ctx.drawLinearGradient(face, start: CGPoint(x: 0, y: faceRect.maxY), end: CGPoint(x: 0, y: faceRect.minY), options: [])
-ctx.setStrokeColor(rgb(255,255,255,0.05)); ctx.setLineWidth(2)
-var d: CGFloat = -S
-while d < S*2 { ctx.move(to: CGPoint(x: d, y: faceRect.minY)); ctx.addLine(to: CGPoint(x: d+faceRect.height, y: faceRect.maxY)); d += 16 }
+let sheen = CGGradient(colorsSpace: cs, colors: [rgb(255, 255, 255, 0.07), rgb(255, 255, 255, 0)] as CFArray, locations: [0, 1])!
+ctx.drawRadialGradient(sheen, startCenter: CGPoint(x: S * 0.5, y: S * 0.95), startRadius: 0, endCenter: CGPoint(x: S * 0.5, y: S * 0.95), endRadius: S * 0.9, options: [])
+ctx.setStrokeColor(rgb(255, 255, 255, 0.025)); ctx.setLineWidth(2)
+var y: CGFloat = 0
+while y < S { ctx.move(to: CGPoint(x: 0, y: y)); ctx.addLine(to: CGPoint(x: S, y: y)); y += 6 }
 ctx.strokePath(); ctx.restoreGState()
 
-// 3. Neural waveform (vertices = neurons, faint synapse lines)
-let cx0 = faceRect.minX + 26, cx1 = faceRect.maxX - 26
-let midY = faceRect.midY
-let amps: [CGFloat] = [0.10, 0.55, 0.22, 0.85, 0.40, 0.95, 0.30, 0.60, 0.12]
-var nodes: [CGPoint] = []
-for (i, a) in amps.enumerated() {
-    let t = CGFloat(i) / CGFloat(amps.count - 1)
-    let x = cx0 + (cx1 - cx0) * t
-    let sign: CGFloat = (i % 2 == 0) ? -1 : 1
-    nodes.append(CGPoint(x: x, y: midY + sign * a * (faceRect.height * 0.30)))
-}
-func strokeWave(width: CGFloat, color: CGColor, blur: Bool) {
+// 2. Meter geometry: pivot low-center, arc sweeping 140° across the upper half.
+let pivot = CGPoint(x: S * 0.5, y: S * 0.31)
+let R: CGFloat = S * 0.45
+let a0: CGFloat = 160 * .pi / 180, a1: CGFloat = 20 * .pi / 180      // left → right (CG angles, y-up)
+func pt(_ ang: CGFloat, _ r: CGFloat) -> CGPoint { CGPoint(x: pivot.x + cos(ang) * r, y: pivot.y + sin(ang) * r) }
+func lerp(_ t: CGFloat) -> CGFloat { a0 + (a1 - a0) * t }
+
+// Glow window behind the arc (the meter face).
+ctx.saveGState()
+let face = CGGradient(colorsSpace: cs, colors: [rgb(140, 255, 190, 0.10), rgb(140, 255, 190, 0)] as CFArray, locations: [0, 1])!
+ctx.drawRadialGradient(face, startCenter: pivot, startRadius: 0, endCenter: pivot, endRadius: R * 1.1, options: [])
+ctx.restoreGState()
+
+// 3. Scale arc: green portion (0…82 %) then red (82…100 %).
+func arc(from t0: CGFloat, to t1: CGFloat, r: CGFloat, width: CGFloat, color: CGColor, glow: CGFloat = 0) {
     ctx.saveGState()
-    if blur { ctx.setShadow(offset: .zero, blur: 26, color: color) }
-    let p = CGMutablePath(); p.move(to: nodes[0])
-    for i in 1..<nodes.count {
-        let prev = nodes[i-1], cur = nodes[i]; let midX = (prev.x + cur.x)/2
-        p.addCurve(to: cur, control1: CGPoint(x: midX, y: prev.y), control2: CGPoint(x: midX, y: cur.y))
-    }
-    ctx.addPath(p); ctx.setStrokeColor(color); ctx.setLineWidth(width)
-    ctx.setLineCap(.round); ctx.setLineJoin(.round); ctx.strokePath(); ctx.restoreGState()
+    if glow > 0 { ctx.setShadow(offset: .zero, blur: glow, color: color) }
+    ctx.addArc(center: pivot, radius: r, startAngle: lerp(t0), endAngle: lerp(t1), clockwise: true)
+    ctx.setStrokeColor(color); ctx.setLineWidth(width); ctx.setLineCap(.butt); ctx.strokePath()
+    ctx.restoreGState()
 }
-strokeWave(width: 18, color: rgb(255,176,64), blur: true)
-strokeWave(width: 11, color: rgb(255,210,140), blur: false)
-ctx.saveGState(); ctx.setStrokeColor(rgb(120,200,255,0.30)); ctx.setLineWidth(2.5)
-for i in 0..<nodes.count { for j in [i+2, i+3] where j < nodes.count { ctx.move(to: nodes[i]); ctx.addLine(to: nodes[j]) } }
-ctx.strokePath(); ctx.restoreGState()
-for (i, n) in nodes.enumerated() {
-    let r: CGFloat = (i % 2 == 0) ? 13 : 16
-    ctx.saveGState(); ctx.setShadow(offset: .zero, blur: 18, color: rgb(120,200,255,0.9))
-    ctx.setFillColor(rgb(150,215,255)); ctx.fillEllipse(in: CGRect(x: n.x-r, y: n.y-r, width: r*2, height: r*2)); ctx.restoreGState()
-    ctx.setFillColor(rgb(255,255,255)); ctx.fillEllipse(in: CGRect(x: n.x-r*0.4, y: n.y-r*0.4, width: r*0.8, height: r*0.8))
+arc(from: 0, to: 0.82, r: R, width: 30, color: phosphor, glow: 30)
+arc(from: 0.83, to: 1.0, r: R, width: 30, color: red, glow: 30)
+
+// Tick marks (major every 20 %, minor every 5 %).
+for i in 0...20 {
+    let t = CGFloat(i) / 20, major = i % 4 == 0
+    let inner = pt(lerp(t), R - (major ? 92 : 62)), outer = pt(lerp(t), R - 36)
+    ctx.setStrokeColor(t > 0.82 ? red : (major ? phosphor : phosphorDim))
+    ctx.setLineWidth(major ? 12 : 6); ctx.setLineCap(.round)
+    ctx.move(to: inner); ctx.addLine(to: outer); ctx.strokePath()
 }
 
-// 4. Green power LED (top-right of bezel)
+// 4. Needle: pointing at 78 % — high, with headroom to spare before the red.
+let needleT: CGFloat = 0.78
+let tip = pt(lerp(needleT), R - 44)
 ctx.saveGState()
-let led = CGPoint(x: ampRect.maxX - 46, y: ampRect.maxY - 44)
-ctx.setShadow(offset: .zero, blur: 16, color: rgb(60,220,120,0.9))
-ctx.setFillColor(rgb(80,230,140)); ctx.fillEllipse(in: CGRect(x: led.x-10, y: led.y-10, width: 20, height: 20))
+ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 22, color: rgb(0, 0, 0, 0.7))
+ctx.setStrokeColor(rgb(250, 250, 252)); ctx.setLineWidth(20); ctx.setLineCap(.round)
+ctx.move(to: pivot); ctx.addLine(to: tip); ctx.strokePath()
 ctx.restoreGState()
+ctx.saveGState()
+ctx.setShadow(offset: .zero, blur: 24, color: rgb(255, 255, 255, 0.55))
+ctx.setStrokeColor(rgb(255, 255, 255)); ctx.setLineWidth(8); ctx.setLineCap(.round)
+ctx.move(to: pivot); ctx.addLine(to: tip); ctx.strokePath()
+ctx.restoreGState()
+
+// Pivot cap: metallic dome.
+let capR: CGFloat = 84
+ctx.saveGState()
+ctx.setShadow(offset: CGSize(width: 0, height: -8), blur: 24, color: rgb(0, 0, 0, 0.8))
+ctx.setFillColor(rgb(30, 31, 36)); ctx.fillEllipse(in: CGRect(x: pivot.x - capR, y: pivot.y - capR, width: capR * 2, height: capR * 2))
+ctx.restoreGState()
+ctx.saveGState()
+ctx.addEllipse(in: CGRect(x: pivot.x - capR, y: pivot.y - capR, width: capR * 2, height: capR * 2)); ctx.clip()
+let dome = CGGradient(colorsSpace: cs, colors: [rgb(110, 114, 124), rgb(28, 29, 34)] as CFArray, locations: [0, 1])!
+ctx.drawLinearGradient(dome, start: CGPoint(x: 0, y: pivot.y + capR), end: CGPoint(x: 0, y: pivot.y - capR), options: [])
+ctx.restoreGState()
+ctx.setStrokeColor(rgb(255, 255, 255, 0.35)); ctx.setLineWidth(3)
+ctx.strokeEllipse(in: CGRect(x: pivot.x - capR + 2, y: pivot.y - capR + 2, width: capR * 2 - 4, height: capR * 2 - 4))
+ctx.setFillColor(phosphor); ctx.fillEllipse(in: CGRect(x: pivot.x - 14, y: pivot.y - 14, width: 28, height: 28))
+
+// 5. Power LED, bottom-right, and "dB" glyph bottom-left — small, quiet.
+ctx.saveGState()
+ctx.setShadow(offset: .zero, blur: 22, color: rgb(140, 255, 190, 0.9))
+ctx.setFillColor(phosphor); ctx.fillEllipse(in: CGRect(x: S * 0.83, y: S * 0.13, width: 30, height: 30))
+ctx.restoreGState()
+let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 74, weight: .heavy), .foregroundColor: NSColor(cgColor: rgb(255, 255, 255, 0.28))!]
+let gfx = NSGraphicsContext(cgContext: ctx, flipped: false)
+NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = gfx
+NSAttributedString(string: "dB", attributes: attrs).draw(at: CGPoint(x: S * 0.135, y: S * 0.115))
+NSGraphicsContext.restoreGraphicsState()
 
 guard let img = ctx.makeImage() else { fatalError("img") }
 let rep = NSBitmapImageRep(cgImage: img)
