@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="launch_bg">#FF0E0E10</color>
+    <style name="Theme.Headroom" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/launch_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground_img</item>
+        <item name="postSplashScreenTheme">@style/Theme.Headroom.App</item>
+    </style>
+    <style name="Theme.Headroom.App" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/launch_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
