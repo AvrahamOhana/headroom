@@ -81,6 +81,11 @@ DEV=<device-id from `xcrun devicectl list devices`> tools/deploy.sh
 Debug builds keep the C++ and Swift optimizers on (`GCC_OPTIMIZATION_LEVEL=2`, `-O`): the neural
 network is ~40× slower unoptimized and the audio thread starves.
 
+### Android
+
+A native Android port lives in `android/` (C++ engine on Oboe + the same NAM core, Kotlin/Compose UI).
+See [`android/README.md`](android/README.md). Build with `cd android && ./gradlew assembleDebug`.
+
 ## Testing without a device
 
 - `tools/blocks_test.swift` — compiles the real DSP blocks and checks them numerically (gate, compressor,

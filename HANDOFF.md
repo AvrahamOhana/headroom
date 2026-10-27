@@ -256,6 +256,17 @@ reload gap); dual-cab + mic-position; power-amp sag + global EQ; lower the deplo
 
 ---
 
+### Android port (2026-10-27, branch `android`)
+`android/` — C++ port of every Swift DSP block + `Engine` (dual paths, stereo stage, looper, tuner) on
+Oboe full duplex, JNI, Kotlin/Compose UI (chain drag & drop, editors, presets, Live, MIDI incl. BLE,
+TONE3000 with the same `namrig://oauth-callback` redirect). Details and build/test steps in
+`android/README.md`. Gotchas learned:
+- zsh: never put a command in a variable (`E="adb -s X"; $E …` fails) — export `ANDROID_SERIAL`.
+- Homebrew's `temurin` cask needs sudo (hangs headless) → use the `openjdk@17` formula.
+- The UI must never wait on the audio thread: chain swaps use a hazard pointer, not an epoch wait
+  (the emulator's audio took 17 s to deliver its first callback and froze the UI).
+- The rig UI is forced LTR (signal flow) — Hebrew locales mirrored the whole pedalboard.
+
 ## 7. Key files
 
 ```
